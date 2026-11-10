@@ -1,0 +1,43 @@
+# 交付前必须过的三关：产物与源码一致 / 测试 / 包可安装。
+#
+# 为什么要有「产物一致」这一步：lib/client.js 是 scripts/build-client.mjs 生成后又提交进仓库的，
+# 改了 src 忘了重新构建时，仓库里的产物与源码就悄悄分叉——本地看源码、Desktop 跑旧产物。
+# 上一版拿不到手动刷新的测试覆盖，也是这样一路漏过去的。
+#
+# 测试零运行时依赖（不需要 npm install / pnpm install），所以整条流水线在 1 分钟内跑完。
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 构建客户端产物
+        run: node scripts/build-client.mjs
+
+      - name: 产物必须与源码一致（改了 src 就要重新构建并提交 lib/client.js）
+        run: git diff --exit-code -- lib/client.js
+
+      - name: 单元测试
+        run: npm test
+
+      - name: 包校验
+        run: npm run check
+
+      - name: 打包并校验可安装产物
+        run: |
+          npm pack --ignore-scripts
+          node scripts/check-workbench-package.mjs --tarball "$(ls dsh-workbench-intel-center-*.tgz)"
