@@ -18,8 +18,12 @@ const sourcePath = path.join(root, 'src', 'client', 'main.js')
 const corePath = path.join(root, 'src', 'shared', 'core.js')
 const outPath = path.join(root, 'lib', 'client.js')
 
-const source = fs.readFileSync(sourcePath, 'utf8')
-const core = fs.readFileSync(corePath, 'utf8')
+// 统一换行再处理：Windows 上源文件是 CRLF，直接 split('\n') 会留下一个 '\r'，
+// 缩进后变成行尾空白，导致同一份源码在 Windows / Linux 上生成不同的产物。
+const readSource = (file) => fs.readFileSync(file, 'utf8').replace(/\r\n?/g, '\n')
+
+const source = readSource(sourcePath)
+const core = readSource(corePath)
 
 // 共享逻辑以 ESM 写（服务端与 node --test 直接导入），构建时去掉 export 关键字内联成一块，
 // 再解构出客户端要用的名字，避免运行期再去 require 相对路径。
