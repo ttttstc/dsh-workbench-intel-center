@@ -57,12 +57,17 @@ test('失败被记成 failed，并保留可读原因', async () => {
 })
 
 test('超过 timeoutMs 仍未结束的任务标记为失败，不永远停在 running', async () => {
-  const job = createJob({ timeoutMs: 20, run: () => new Promise(() => {}) })
+  // 用可控的 gate 而不是 new Promise(() => {})：测试结束时必须让挂起的 promise 落地，
+  // 否则 Node 20 的 test runner 会判定「promise 仍未结算，事件循环却已空」而直接判失败。
+  let release = () => {}
+  const gate = new Promise((resolve) => { release = resolve })
+  const job = createJob({ timeoutMs: 20, run: () => gate })
   job.start('manual')
   const snapshot = await job.wait()
   assert.equal(snapshot.status, 'failed')
   assert.match(snapshot.error, /超过/)
   assert.equal(job.running, false)
+  release({ count: 0 })
 })
 
 test('lastRunOf 在没跑过时给出 ok:null 的历史形状', () => {
@@ -97,4 +102,7 @@ test('late 结果不覆盖新一轮：token 失效后忽略', async () => {
   releases[0]({ count: 99 })
   await flush()
   assert.equal(job.snapshot().status, 'running', '第一轮的迟到结果不能改写第二轮状态')
+  // 收尾：第二轮也要结算，否则测试结束时会留下挂起的 promise（Node 20 会因此判失败）。
+  releases[1]({ count: 1 })
+  await job.wait()
 })
