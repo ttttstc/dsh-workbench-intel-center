@@ -32,10 +32,12 @@ const CORE_EXPORTS = [
   'filterCards',
   'highlightCards',
   'buildReviewPrompt',
-  'buildLinuxdoPrompt',
   'buildXPrompt',
   'RADAR_CATEGORIES',
   'RADAR_CATEGORY_LABEL',
+  'X_TOP_LIMIT',
+  'API_VERSION',
+  'sortRadarItems',
   'filterRadar',
   'relativeTime'
 ]

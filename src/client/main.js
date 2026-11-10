@@ -28,6 +28,7 @@ const CSS = `
 .intel-btn-primary:hover:not(:disabled){filter:brightness(1.06);background:var(--dsw-alias-brand-primary,#2f6fed)}
 .intel-btn-ghost{border-color:transparent;background:transparent;padding:5px 8px}
 .intel-body{flex:1 1 auto;min-height:0;overflow:auto;padding:14px 20px 8px;scrollbar-gutter:stable}
+.intel-panel{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
 .intel-empty{margin:6px 0 0;padding:22px;border:1px dashed rgba(127,127,127,.32);border-radius:10px;text-align:center;font-size:13px;opacity:.85}
 .intel-empty strong{display:block;font-size:14px;margin-bottom:6px;opacity:1}
 .intel-section{margin:0 0 16px}
@@ -83,6 +84,7 @@ const CSS = `
 .intel-modal-box footer{padding:10px 16px;border-top:1px solid rgba(127,127,127,.2);display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
 .intel-pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px;line-height:1.6;background:rgba(127,127,127,.08);border-radius:8px;padding:10px;max-height:46vh;overflow:auto}
 .intel-err{color:#c0392b;font-size:12px;margin:6px 0 0}
+.intel-strip{display:flex;flex-direction:column;gap:6px;padding:10px 20px 0;flex:0 0 auto}
 .intel-notice{display:flex;gap:8px;align-items:center;justify-content:space-between;border:1px solid rgba(214,146,26,.45);background:rgba(214,146,26,.12);border-radius:9px;padding:7px 10px;margin:0 0 12px;font-size:12.5px}
 .intel-tabs{display:flex;gap:2px;padding:0 20px;border-bottom:1px solid rgba(127,127,127,.18);flex:0 0 auto}
 .intel-tab{appearance:none;border:0;border-bottom:2px solid transparent;background:transparent;color:inherit;font:inherit;font-size:12.5px;line-height:1.4;padding:8px 10px;cursor:pointer;opacity:.66;white-space:nowrap}
@@ -120,6 +122,7 @@ const CSS = `
 .intel-seg:hover{background:var(--il-soft)}
 .intel-seg[data-on='1']{background:var(--il-ink);color:var(--il-bg)}
 .intel-seg-strong{font-weight:800}
+.intel-cat-strong{font-weight:800;border-width:2px}
 .intel-seg-count{font-size:11.5px;opacity:.6;font-weight:600}
 .intel-catrow{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid rgba(127,127,127,.28);flex-wrap:wrap}
 .intel-catrow-label{font-size:12.5px;color:var(--il-mute);min-width:32px}
@@ -175,7 +178,7 @@ const CSS = `
   .intel-drawer{flex:0 0 auto;max-width:none;width:100%;max-height:56%;border-left:0;border-top:1px solid rgba(127,127,127,.22)}
   .intel-grid{grid-template-columns:1fr}
   .intel-two{grid-template-columns:1fr}
-  .intel-head,.intel-body,.intel-foot{padding-left:12px;padding-right:12px}
+  .intel-head,.intel-body,.intel-foot,.intel-strip{padding-left:12px;padding-right:12px}
   .intel-list-row{flex-wrap:wrap}
   .intel-rank{flex:0 0 20px}
   .intel-badges{gap:4px}
@@ -192,6 +195,8 @@ const CSS = `
 .intel .intel-tab[data-on='1']{color:var(--il-accent);border-bottom-color:var(--il-accent);font-weight:700}
 .intel .intel-btn{border:1.5px solid var(--il-line);background:transparent;border-radius:2px;font-weight:600}
 .intel .intel-btn:hover:not(:disabled){background:var(--il-soft)}
+.intel .intel-btn-warn{border-color:var(--il-accent);color:var(--il-accent);font-weight:700}
+.intel .intel-btn-strong{font-weight:800;border-width:2px}
 .intel .intel-btn-primary{background:var(--il-accent);border-color:var(--il-accent);color:#FFFDF7}
 .intel .intel-btn-primary:hover:not(:disabled){background:var(--il-accent);filter:brightness(.92)}
 .intel .intel-card,.intel .intel-topcard,.intel .intel-list-row{border:1.5px solid var(--il-line);border-radius:3px;background:#fff}
@@ -239,6 +244,15 @@ async function apiFetch(path, init) {
 }
 
 
+/** 本地日期（YYYY-MM-DD）：榜单的「今日」按用户时区算，不拿 UTC 字符串截断。 */
+function localDayOf(iso) {
+  const time = Date.parse(iso)
+  if (Number.isNaN(time)) return ''
+  const date = new Date(time)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
 function ScorePill({ score }) {
   return h('span', { className: 'intel-score', title: '适用场景评分（1-5）' },
     h('b', null, Number(score || 0)),
@@ -260,7 +274,6 @@ function CardFacts({ facts }) {
 }
 
 function Card({ card, expanded, onToggle, onChangeNote, onChangeFlag }) {
-  const noteRef = useRef(null)
   const tags = card.tags || []
   return h('article', { className: 'intel-card', 'data-flag': card.flag || 'none' },
     h('div', { className: 'intel-card-head' },
@@ -317,7 +330,6 @@ function Card({ card, expanded, onToggle, onChangeNote, onChangeFlag }) {
     expanded ? h('label', { style: { display: 'block' } },
       h('span', { className: 'intel-muted', style: { fontSize: '12px' } }, '我的备注'),
       h('textarea', {
-        ref: noteRef,
         className: 'intel-note',
         value: card.note || '',
         placeholder: '记下试用情况、可用区域、遇到的坑……（自动保存）',
@@ -350,19 +362,32 @@ function Panel(props) {
   const [radarCategory, setRadarCategory] = useState('')
   const [radarQuery, setRadarQuery] = useState('')
   const [radarKeyword, setRadarKeyword] = useState('')
+  const [radarSince, setRadarSince] = useState('')
+  const [radarOrder, setRadarOrder] = useState('score')
   const [radarStatus, setRadarStatus] = useState(null)
   const [radarBusy, setRadarBusy] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+  const [serverOutdated, setServerOutdated] = useState(false)
   const [promptText, setPromptText] = useState('')
+  const [promptKind, setPromptKind] = useState('review')
   const [copied, setCopied] = useState('')
   const [tab, setTab] = useState('radar')
   const [woolKey, setWoolKey] = useState(0)
   const [woolForce, setWoolForce] = useState(false)
   const [woolLoading, setWoolLoading] = useState(false)
+  const [unsaved, setUnsaved] = useState(false)
   const saveTimer = useRef(null)
+  const noticeTimer = useRef(null)
+  const prevJobRunning = useRef(false)
+  const loadSeq = useRef(0)
+  const baseRef = useRef('')
 
   useEffect(() => { ensureStyle() }, [])
 
   const load = useCallback(async () => {
+    // 连点「刷新」时只认最后一次响应，旧响应不能把新数据盖回去。
+    const seq = loadSeq.current + 1
+    loadSeq.current = seq
     setLoading(true)
     setError('')
     try {
@@ -370,17 +395,37 @@ function Panel(props) {
         apiFetch('/state'),
         apiFetch('/meta').catch(() => null)
       ])
+      if (seq !== loadSeq.current) return
       setState(statePayload.state)
-      if (metaPayload) setMeta(metaPayload)
+      baseRef.current = statePayload.state?.updatedAt || ''
+      if (metaPayload) {
+        setMeta(metaPayload)
+        // 客户端换版立即生效，服务端要等 Harness 重启。版本对不上时明说，
+        // 否则用户只会看到「刷新没反应」，以为是功能坏了。
+        setServerOutdated(Number(metaPayload.apiVersion) !== API_VERSION)
+      }
     } catch (caught) {
-      setError(caught?.message || '读取情报数据失败。')
+      if (seq === loadSeq.current) setError(caught?.message || '读取情报数据失败。')
     } finally {
-      setLoading(false)
+      if (seq === loadSeq.current) setLoading(false)
     }
   }, [])
 
   useEffect(() => { void load() }, [load])
-  useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current) }, [])
+  useEffect(() => () => {
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    if (noticeTimer.current) clearTimeout(noticeTimer.current)
+    // 关掉工作台时还有没保存的改动：用 sendBeacon 补最后一次，别让用户白写备注。
+    const pending = stateRef.current
+    if (pending && unsavedRef.current) {
+      try {
+        const body = new Blob([JSON.stringify({ ...pending, baseUpdatedAt: baseRef.current })], { type: 'application/json' })
+        navigator?.sendBeacon?.(API + '/state', body)
+      } catch {
+        /* 关页面时没别的办法，下次打开还会读到旧值 */
+      }
+    }
+  }, [])
 
   const loadXStatus = useCallback(async () => {
     try {
@@ -403,64 +448,171 @@ function Panel(props) {
 
   useEffect(() => { void loadRadarStatus() }, [loadRadarStatus])
 
-  const refreshRadarNow = useCallback(async () => {
-    setRadarBusy(true)
-    setNotice('马上抓取四个来源…')
-    try {
-      const result = await apiFetch('/radar/refresh', { method: 'POST', body: JSON.stringify({ reason: 'manual' }) })
-      await load()
-      await loadRadarStatus()
-      if (result?.skipped) {
-        setNotice('上一轮抓取还在进行，稍等几秒。')
-      } else {
-        const failed = (result?.errors || []).length ? '；部分来源失败：' + result.errors.join('、') : ''
-        setNotice('已刷新：' + (result?.count ?? 0) + ' 条（本轮新抓 ' + (result?.fresh ?? 0) + ' 条）' + failed + '；NodeSeek 与 LINUX DO 兜底在后台补入')
-      }
-      apiFetch('/x/refresh', { method: 'POST', body: JSON.stringify({ reason: 'manual' }) })
-        .then(function () { void loadXStatus(); void load() })
-        .catch(function () {})
-    } catch (caught) {
-      setNotice(caught?.message || '抓取失败：请确认工作台已重启并加载新版本。')
-    } finally {
-      setRadarBusy(false)
-    }
-  }, [load, loadRadarStatus, loadXStatus])
-  const refreshXNow = useCallback(async () => {
-    setXBusy(true)
-    setNotice('')
-    try {
-      const result = await apiFetch('/x/refresh', { method: 'POST', body: JSON.stringify({ reason: 'manual' }) })
-      if (result?.skipped) setNotice('上一轮抓取还在进行，稍等几秒。')
-      else setNotice(`已抓取 ${result?.count ?? 0} 条 X 帖子${result?.errors?.length ? '（部分关键词失败）' : ''}`)
-      await load()
-      await loadXStatus()
-    } catch (caught) {
-      setNotice(caught?.message || '抓取 X 失败：请确认 Chrome 已开启远程调试，且 web-access 的 CDP 代理在运行。')
-    } finally {
-      setXBusy(false)
-    }
-  }, [load, loadXStatus])
+  // 服务端自己也在跑定时任务：按钮的「正在抓取」要跟着服务端状态走，不能只信本地这次请求。
+  const radarRunning = Boolean(radarBusy || radarStatus?.job?.running)
+  const xRunning = Boolean(xBusy || xStatus?.job?.running)
+  const jobsRunning = radarRunning || xRunning
 
-  const persist = useCallback(async (next) => {
+  // 后台任务结束（包含在别处跑完的）时自动拉一次数据，用户不用手动刷新。
+  useEffect(() => {
+    if (prevJobRunning.current && !jobsRunning) void load()
+    prevJobRunning.current = jobsRunning
+  }, [jobsRunning, load])
+
+  // 有任务在跑时低速轮询状态。
+  useEffect(() => {
+    if (!jobsRunning) return undefined
+    const timer = setInterval(() => {
+      void loadRadarStatus()
+      void loadXStatus()
+    }, 4000)
+    return () => clearInterval(timer)
+  }, [jobsRunning, loadRadarStatus, loadXStatus])
+
+  // 抓取期间每秒走一格：用户点下去立刻能看到「确实开始了、已经跑了多久」。
+  useEffect(() => {
+    if (!jobsRunning) {
+      setElapsed(0)
+      return undefined
+    }
+    const startedAtLocal = Date.now()
+    setElapsed(0)
+    const timer = setInterval(() => setElapsed(Math.round((Date.now() - startedAtLocal) / 1000)), 1000)
+    return () => clearInterval(timer)
+  }, [jobsRunning])
+
+  // Esc 关掉提示词弹窗：模态开着时键盘只有一个出口才不别扭。
+  useEffect(() => {
+    if (!promptText) return undefined
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setPromptText('')
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [promptText])
+
+  // 强制刷新羊毛页后，即使 iframe 的 load 事件没来也要把 force 复位，
+  // 否则之后每次切到这个标签页都会绕过缓存重新回源。
+  useEffect(() => {
+    if (!woolForce) return undefined
+    const timer = setTimeout(() => setWoolForce(false), 10000)
+    return () => clearTimeout(timer)
+  }, [woolForce, woolKey])
+
+  /** 提示条：成功类几秒后自动消失，失败与「正在跑」类留在页面上等用户处理。 */
+  const notify = useCallback((text, { sticky = false } = {}) => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current)
+    setNotice(text)
+    if (!sticky && text) {
+      noticeTimer.current = setTimeout(() => setNotice(''), 12000)
+    }
+  }, [])
+
+  /** 抓取在后台跑，这里轮询状态直到这一轮结束（最多等 3 分钟）。 */
+  const waitForJob = useCallback(async (kind) => {
+    const deadline = Date.now() + 180000
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      const status = await apiFetch(`/${kind}/status`).catch(() => null)
+      if (status) {
+        if (kind === 'radar') setRadarStatus(status)
+        else setXStatus(status)
+        if (!status.job?.running) return status
+      }
+      if (Date.now() > deadline) return null
+    }
+  }, [])
+
+  const runRefresh = useCallback(async (kind) => {
+    const isRadar = kind === 'radar'
+    const label = isRadar ? '羊毛雷达' : 'X 榜单'
+    const setBusy = isRadar ? setRadarBusy : setXBusy
+    setBusy(true)
+    notify(`已启动：正在抓取${label}，右边按钮开始计时。可以切到别的标签页，抓完这里会给结果。`, { sticky: true })
     try {
-      const payload = await apiFetch('/state', { method: 'POST', body: JSON.stringify(next) })
+      const started = await apiFetch(`/${kind}/refresh`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'manual' })
+      })
+      if (started?.skipped) notify(`${label}上一轮还在抓（不是没反应），等它结束再试。`, { sticky: true })
+      const finalStatus = await waitForJob(kind)
+      const snapshot = finalStatus?.job
+      await load()
+      const seconds = Math.max(1, Math.round((snapshot?.durationMs || 0) / 1000))
+      if (snapshot?.status === 'succeeded') {
+        const result = snapshot.result || {}
+        const bySource = result.bySource || {}
+        const breakdown = Object.keys(bySource).length
+          ? '（' + Object.entries(bySource).map(([id, count]) => `${RADAR_SOURCE_LABEL[id] || id} ${count}`).join(' / ') + '）'
+          : ''
+        const failed = (result.errors || []).length ? `；个别来源失败：${result.errors.join('、')}` : ''
+        notify(`${label}抓取完成 · 用时 ${seconds} 秒 · 本轮 ${result.fresh ?? 0} 条${breakdown} · 在库 ${result.count ?? 0} 条${failed}`)
+      } else if (snapshot?.status === 'failed') {
+        notify(`${label}抓取失败（用时 ${seconds} 秒）：${snapshot.error || '原因未记录'}。可以再试一次；X 需要 Chrome 开着远程调试，且 web-access 的 CDP 代理（localhost:3456）在运行。`, { sticky: true })
+      } else {
+        notify(`${label}还在后台抓（已经在计时），回到这个页面会自动更新。`, { sticky: true })
+      }
+    } catch (caught) {
+      notify(`${label}没能启动：${caught?.message || caught}`, { sticky: true })
+    } finally {
+      setBusy(false)
+    }
+  }, [load, notify, waitForJob])
+
+  const refreshRadarNow = useCallback(() => runRefresh('radar'), [runRefresh])
+  const refreshXNow = useCallback(() => runRefresh('x'), [runRefresh])
+
+  const persist = useCallback(async (next, attempt = 0) => {
+    try {
+      const payload = await apiFetch('/state', {
+        method: 'POST',
+        // baseUpdatedAt 让服务端知道「我这一份是基于哪一版读出来的」，别处改过时它会合并而不是覆盖。
+        body: JSON.stringify({ ...next, baseUpdatedAt: baseRef.current })
+      })
       setSavedAt(new Date().toISOString())
-      if (payload?.error) setError(payload.error)
-      else setError('')
+      setUnsaved(false)
+      setError('')
+      baseRef.current = payload?.state?.updatedAt || baseRef.current
+      if (payload?.conflict) {
+        notify('检测到卡片在别处被改过，已自动合并，没有覆盖对方新增的内容。')
+      }
+      // 服务端合并后的结果就是最新真相；本地没有更新改动时直接采用，避免界面与文件不一致。
+      if (payload?.state && stateRef.current === next) {
+        stateRef.current = payload.state
+        setState(payload.state)
+      }
       // 保存期间又改过：再存一次，避免最后一次编辑只留在内存里。
       const latest = stateRef.current
-      if (latest && latest !== next) {
+      if (latest && latest !== next && latest !== payload?.state) {
         if (saveTimer.current) clearTimeout(saveTimer.current)
         saveTimer.current = setTimeout(() => { void persist(latest) }, 400)
       }
     } catch (caught) {
-      setError(caught?.message || '保存失败，稍后会再试。')
+      const reason = caught?.message || '网络中断'
+      if (attempt < 2) {
+        setUnsaved(true)
+        setError(`保存失败：${reason}；正在自动重试（第 ${attempt + 1} 次）…`)
+        if (saveTimer.current) clearTimeout(saveTimer.current)
+        saveTimer.current = setTimeout(() => {
+          void persist(stateRef.current || next, attempt + 1)
+        }, 1000 * (attempt + 1))
+        return
+      }
+      setUnsaved(true)
+      setError(`保存失败：${reason}。改动还在页面上，点右上角「重试保存」；关掉工作台会丢。`)
     }
   }, [])
+
+  const retrySave = useCallback(() => {
+    const latest = stateRef.current
+    if (latest) void persist(latest)
+  }, [persist])
 
   // 用 ref 拿最新状态再算下一版：副作用不放进 setState 更新函数，StrictMode 下也不会重复排定时器。
   const stateRef = useRef(state)
   stateRef.current = state
+  const unsavedRef = useRef(false)
+  unsavedRef.current = unsaved
 
   const update = useCallback((mutator) => {
     const current = stateRef.current
@@ -473,14 +625,13 @@ function Panel(props) {
     const next = mutator(draft)
     stateRef.current = next
     setState(next)
+    setUnsaved(true)
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => { void persist(next) }, 700)
   }, [persist])
 
   const cards = state?.cards || []
   const topics = state?.topics || []
-  const linuxdo = state?.linuxdo || { updatedAt: '', date: '', keywords: [], items: [] }
-  const linuxdoItems = linuxdo.items || []
   const categories = useMemo(() => {
     const seen = new Map()
     for (const card of cards) seen.set(card.category, (seen.get(card.category) || 0) + 1)
@@ -493,12 +644,32 @@ function Panel(props) {
   const highlights = useMemo(() => highlightCards(cards, 3), [cards])
   const xFeed = state?.x || { updatedAt: '', date: '', keywords: [], items: [] }
   const xItems = xFeed.items || []
+  // 展示顺序一律按发布时间倒序：旧版本写进文件的是点赞序，这里不依赖文件里的顺序。
+  const xShown = [...xItems].sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0))
   const radarFeed = state?.radar || { updatedAt: '', date: '', items: [] }
   const radarItems = radarFeed.items || []
   const RADAR_SOURCE_LABEL = { linuxdo: 'LINUX DO', v2ex: 'V2EX', nodeseek: 'NodeSeek', appinn: '小众软件' }
 
+  // 时间表只有一处真值（服务端 RUN_HOURS），界面把它渲染出来，不另写一份文案。
+  const runHoursText = (radarStatus?.hours || [8, 12, 16, 20])
+    .map((hour) => `${String(hour).padStart(2, '0')}:00`).join(' / ')
+
+  /**
+   * 「上次跑成什么样」的常驻说明。
+   * 提示条十几秒后会消失，但用户需要一个随时能确认「刚才那下到底成功没有」的地方。
+   */
+  const describeJob = (job) => {
+    if (!job) return ''
+    if (job.status === 'running') return '正在抓取…'
+    if (job.status === 'failed') return `上次失败：${String(job.error || '原因未记录').slice(0, 60)}`
+    if (!job.result) return ''
+    const seconds = Math.max(1, Math.round((job.durationMs || 0) / 1000))
+    const parts = Object.entries(job.result.bySource || {})
+      .map(([id, count]) => `${RADAR_SOURCE_LABEL[id] || id} ${count}`)
+    return `上次抓到 ${job.result.fresh ?? 0} 条 · 用时 ${seconds}s${parts.length ? '（' + parts.join(' / ') + '）' : ''}`
+  }
+
   const radarVisible = useMemo(() => filterRadar(radarItems, { source: radarSource, category: radarCategory, q: radarQuery }), [radarItems, radarSource, radarCategory, radarQuery])
-  const radarCategoriesPresent = useMemo(() => { const seen = new Map(); for (const item of radarItems) seen.set(item.category, (seen.get(item.category) || 0) + 1); return [...seen.entries()] }, [radarItems])
   const radarSourcesPresent = useMemo(() => { const seen = new Map(); for (const item of radarItems) seen.set(item.source, (seen.get(item.source) || 0) + 1); return [...seen.entries()] }, [radarItems])
 
   const activeFilters = Boolean(q || category || status || flag || minScore)
@@ -513,7 +684,7 @@ function Panel(props) {
       if (!existing && !folderConfirmed) {
         // 首次要选一个资料文件夹，系统弹的是「文件夹」选择框而不是上传文件框，先说清楚再弹。
         setFolderConfirmed(true)
-        setNotice('第一次用 AI 对话要先选一个「资料文件夹」：再点一次按钮会弹出系统的文件夹选择框（不是上传文件）。选好后会话就建在这个目录里。')
+        notify('第一次用 AI 对话要先选一个「资料文件夹」：再点一次按钮会弹出系统的文件夹选择框（不是上传文件）。选好后会话就建在这个目录里。', { sticky: true })
         return
       }
       setConvBusy(true)
@@ -525,17 +696,17 @@ function Panel(props) {
         const created = await service.newWorkspaceSession()
         const hasNow = typeof service?.currentSession === 'function' ? service.currentSession() : null
         if (!created && !hasNow) {
-          setNotice('已取消选择资料位置，没有创建会话。')
+          notify('已取消选择资料位置，没有创建会话。')
           return
         }
       }
       setConvOpen(true)
     } catch (caught) {
-      setNotice(caught?.message || '无法创建本工作台的会话，请检查工作台是否已启用。')
+      notify(caught?.message || '无法创建本工作台的会话，请检查工作台是否已启用。', { sticky: true })
     } finally {
       setConvBusy(false)
     }
-  }, [convOpen, folderConfirmed, service])
+  }, [convOpen, folderConfirmed, notify, service])
 
   const prepareReview = useCallback(async () => {
     const text = buildReviewPrompt({
@@ -545,35 +716,19 @@ function Panel(props) {
       today: todayISO()
     })
     setPromptText(text)
+    setPromptKind('review')
     setCopied('')
     try {
       if (navigator?.clipboard?.writeText) {
         await navigator.clipboard.writeText(text)
         setCopied('提示词已复制到剪贴板，直接粘贴到对话里发送即可。')
+      } else {
+        setCopied('已生成，但当前环境不允许自动复制：点「复制提示词」再手动粘贴。')
       }
     } catch {
       setCopied('提示词已生成，请点「复制提示词」再粘贴到对话里。')
     }
   }, [cards, meta, topics])
-
-  const prepareLinuxdo = useCallback(async () => {
-    const text = buildLinuxdoPrompt({
-      date: todayISO(),
-      keywords: linuxdo.keywords && linuxdo.keywords.length ? linuxdo.keywords : ['羊毛', '薅'],
-      dataFile: meta?.file || '',
-      existing: linuxdoItems
-    })
-    setPromptText(text)
-    setCopied('')
-    try {
-      if (navigator?.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text)
-        setCopied('抓取指令已复制到剪贴板。先登录 linux.do，再把它粘贴到 AI 对话里发送。')
-      }
-    } catch {
-      setCopied('抓取指令已生成，请点「复制提示词」再粘贴到对话里。')
-    }
-  }, [linuxdo.keywords, linuxdoItems, meta])
 
   const prepareX = useCallback(async () => {
     const text = buildXPrompt({
@@ -583,11 +738,14 @@ function Panel(props) {
       existing: xItems
     })
     setPromptText(text)
+    setPromptKind('x')
     setCopied('')
     try {
       if (navigator?.clipboard?.writeText) {
         await navigator.clipboard.writeText(text)
         setCopied('抓取指令已复制。发到 AI 对话里，它会用 web-access skill 通过你 Chrome 的登录态抓取。')
+      } else {
+        setCopied('已生成，但当前环境不允许自动复制：点「复制提示词」再手动粘贴。')
       }
     } catch {
       setCopied('抓取指令已生成，请点「复制提示词」再粘贴到对话里。')
@@ -629,6 +787,9 @@ function Panel(props) {
       h('span', { className: 'intel-sub' },
         `${cards.length} 张卡片 · 已确认 ${cards.filter((card) => card.status === 'confirmed').length} · 待验证 ${cards.filter((card) => card.status !== 'confirmed').length}`)),
     h('div', { className: 'intel-actions' },
+      unsaved
+        ? h('button', { className: 'intel-btn intel-btn-warn', onClick: retrySave }, '未保存 · 重试保存')
+        : null,
       h('button', { className: 'intel-btn', onClick: () => { void load() }, disabled: loading }, loading ? '读取中…' : '刷新'),
       h('button', {
         className: 'intel-btn intel-btn-primary',
@@ -656,6 +817,8 @@ function Panel(props) {
         if (item.id === 'radar') void loadRadarStatus()
         if (item.id === 'x') void loadXStatus()
         if (item.id === 'wool') setWoolLoading(true)
+        // 这两页的数据可能被 AI 会话或抓取任务直接写进文件，切回来时重新读一次。
+        if (item.id === 'cards') void load()
       }
     }, item.label, item.count > 0 ? h('span', { className: 'intel-tab-count' }, item.count) : null)),
     // 雷达的来源分段与 tab 合并到同一行，避免两条分段条重复占位。
@@ -687,13 +850,6 @@ function Panel(props) {
   const cardsBody = h('div', { className: 'intel-body' },
     h('div', { className: 'intel-band' }, 'VPS 羊毛 · 云主机情报',
       h('span', { className: 'intel-band-sub' }, cards.length + ' 张卡片')),
-    error ? h('p', { className: 'intel-err' }, error) : null,
-
-    notice
-      ? h('div', { className: 'intel-notice', role: 'status' },
-        h('span', null, notice),
-        h('button', { className: 'intel-btn intel-btn-ghost', onClick: () => setNotice('') }, '知道了'))
-      : null,
 
     cards.length === 0 && !loading
       ? h('div', { className: 'intel-empty' },
@@ -712,8 +868,13 @@ function Panel(props) {
             className: 'intel-topcard',
             role: 'button',
             tabIndex: 0,
-            onClick: () => setExpanded((current) => ({ ...current, [card.id]: true })),
-            onKeyDown: (event) => { if (event.key === 'Enter' || event.key === ' ') setExpanded((current) => ({ ...current, [card.id]: true })) }
+            onClick: () => setExpanded((current) => ({ ...current, [card.id]: !current[card.id] })),
+            onKeyDown: (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                setExpanded((current) => ({ ...current, [card.id]: !current[card.id] }))
+              }
+            }
           },
           h('div', { className: 't' }, card.title),
           h('div', { className: 'intel-badges' },
@@ -758,7 +919,7 @@ function Panel(props) {
           onChange: (event) => setFlag(event.target.value)
         },
         h('option', { value: '' }, '全部标记'),
-        FLAGS.filter(([value]) => value !== 'none').map(([value, label]) => h('option', { key: value, value }, label))),
+        FLAGS.map(([value, label]) => h('option', { key: value, value }, label))),
         h('select', {
           className: 'intel-select',
           value: minScore,
@@ -793,7 +954,7 @@ function Panel(props) {
     h('div', { className: 'intel-wool-bar' },
       h('div', { className: 'intel-wool-note' },
         h('strong', null, 'Token 羊毛'),
-        h('span', { className: 'intel-muted' }, ' 内容来自 aihot.news，实时嵌入只读，一切以源站为准。')),
+        h('span', { className: 'intel-muted' }, ' 内容来自 aihot.news，在隔离沙箱里嵌入展示，一切以源站为准。')),
       h('div', { className: 'intel-actions' },
         h('button', {
           className: 'intel-btn',
@@ -816,52 +977,6 @@ function Panel(props) {
     }),
     woolLoading ? h('div', { className: 'intel-wool-loading' }, '正在加载羊毛页…') : null)
 
-  const linuxdoBody = h('div', { className: 'intel-body' },
-    h('div', { className: 'intel-wool-bar' },
-      h('div', { className: 'intel-wool-note' },
-        h('strong', null, 'linux.do 羊毛榜'),
-        h('span', { className: 'intel-muted' },
-          linuxdo.date
-            ? ` · ${linuxdo.date}${(linuxdo.keywords || []).length ? ` · 关键词 ${(linuxdo.keywords || []).join(' / ')}` : ''}`
-            : ' · 还没抓过')),
-      h('div', { className: 'intel-actions' },
-        h('button', { className: 'intel-btn intel-btn-primary', onClick: () => { void prepareLinuxdo() } }, '让 AI 抓今天的'),
-        h('a', {
-          className: 'intel-btn',
-          href: 'https://linux.do/search?q=' + encodeURIComponent('羊毛'),
-          target: '_blank',
-          rel: 'noreferrer noopener'
-        }, '打开 linux.do 搜索'))),
-
-    linuxdoItems.length === 0
-      ? h('div', { className: 'intel-empty' },
-        h('strong', null, '还没有抓取记录'),
-        h('span', null, 'linux.do 需要登录才能搜索。点「让 AI 抓今天的」会生成一段抓取指令：先在工作台的 AI 对话里打开浏览器登录一次，再粘贴发送，Agent 按点赞排序取前 20 条并写回这里。'),
-        h('span', { className: 'intel-muted', style: { display: 'block', marginTop: '6px' } },
-          `关键词：${(linuxdo.keywords && linuxdo.keywords.length ? linuxdo.keywords : ['羊毛', '薅']).join(' / ')} · 目标 ${todayISO()}`))
-      : h('ol', { className: 'intel-list' }, linuxdoItems.map((item, index) =>
-        h('li', { key: item.id || index, className: 'intel-list-row' },
-          h('span', { className: 'intel-rank' }, item.rank || index + 1),
-          h('div', { className: 'intel-list-main' },
-            h('a', {
-              className: 'intel-list-title',
-              href: item.url || 'https://linux.do',
-              target: '_blank',
-              rel: 'noreferrer noopener'
-            }, item.title),
-            h('div', { className: 'intel-badges' },
-              item.category ? h('span', { className: 'intel-badge', 'data-tone': 'cat' }, item.category) : null,
-              item.author ? h('span', { className: 'intel-muted' }, `@${item.author}`) : null,
-              h('span', { className: 'intel-muted' }, `❤ ${item.likes}`),
-              h('span', { className: 'intel-muted' }, `💬 ${item.replies}`),
-              h('span', { className: 'intel-muted' }, `👁 ${item.views}`)),
-            item.excerpt ? h('div', { className: 'intel-muted', style: { fontSize: '12px' } }, item.excerpt) : null)))),
-
-    linuxdo.updatedAt
-      ? h('p', { className: 'intel-muted', style: { fontSize: '12px', margin: '10px 0 0' } },
-        `上次抓取：${formatWhen(linuxdo.updatedAt)}`)
-      : null)
-
   const xBody = h('div', { className: 'intel-body' },
     h('div', { className: 'intel-band' }, 'X 羊毛 · 热帖榜',
       h('span', { className: 'intel-band-sub' }, xItems.length + ' 条')),
@@ -876,8 +991,9 @@ function Panel(props) {
         h('button', {
           className: 'intel-btn intel-btn-primary',
           onClick: () => { void refreshXNow() },
-          disabled: xBusy
-        }, xBusy ? '正在抓取…' : '立即抓 50 条'),
+          disabled: xRunning,
+          'aria-busy': xRunning ? 'true' : 'false'
+        }, xRunning ? `抓取中 ${elapsed}s…` : `立即抓 ${xStatus?.limit ?? X_TOP_LIMIT} 条`),
         h('button', { className: 'intel-btn', onClick: () => { void prepareX() } }, '让 AI 搜'),
         h('a', {
           className: 'intel-btn',
@@ -887,16 +1003,19 @@ function Panel(props) {
         }, '打开 X 搜索')),
       h('div', { className: 'intel-wool-note intel-muted', style: { fontSize: '12px' } },
         xStatus?.nextRunAt
-          ? `下次自动刷新：${formatWhen(xStatus.nextRunAt)} · 每天 09:00 / 14:00 / 21:00`
-          : '自动刷新：每天 09:00 / 14:00 / 21:00（Harness 需保持运行）')),
+          ? `下次自动刷新：${formatWhen(xStatus.nextRunAt)} · 每 ${runHoursText}（本机时区）`
+          : `自动刷新：每天 ${runHoursText}（Harness 需保持运行）`),
+      describeJob(xStatus?.job)
+        ? h('div', { className: 'intel-wool-note intel-muted', style: { fontSize: '12px' } }, describeJob(xStatus?.job))
+        : null),
 
     xItems.length === 0
       ? h('div', { className: 'intel-empty' },
         h('strong', null, '还没有抓取记录'),
-        h('span', null, '点「立即抓 50 条」会通过 web-access 的 CDP 代理、用你 Chrome 的登录态抓取，按点赞排序保留前 50 条；抓不了时用「让 AI 搜」生成指令交给会话。'),
+        h('span', null, `点「立即抓 ${xStatus?.limit ?? X_TOP_LIMIT} 条」会通过 web-access 的 CDP 代理、用你 Chrome 的登录态抓取，按点赞排序保留前 ${xStatus?.limit ?? X_TOP_LIMIT} 条；抓不了时用「让 AI 搜」生成指令交给会话。`),
         h('span', { className: 'intel-muted', style: { display: 'block', marginTop: '6px' } },
           `关键词：${((xFeed.keywords && xFeed.keywords.length) ? xFeed.keywords : ['羊毛', '薅']).join(' / ')} · 目标 ${todayISO()}`))
-      : h('ol', { className: 'intel-list' }, xItems.map((item, index) =>
+      : h('ol', { className: 'intel-list' }, xShown.map((item, index) =>
         h('li', { key: item.id || index, className: 'intel-list-row' },
           h('span', { className: 'intel-rank' }, item.rank || index + 1),
           h('div', { className: 'intel-list-main' },
@@ -920,22 +1039,9 @@ function Panel(props) {
         `上次抓取：${formatWhen(xFeed.updatedAt)}`)
       : null)
 
-  const radarSourceName = (id) => {
-    const found = (radarStatus?.sources || []).find((s) => s.id === id)
-    return found ? found.name : (id || '未知来源')
-  }
-
   const radarStats = (() => {
-    // 「今日」按本机时区算，与界面上的日期一致（此前用 isoS 串截断会错位）。
-    const localDay = (iso) => {
-      const time = Date.parse(iso)
-      if (Number.isNaN(time)) return ''
-      const d = new Date(time)
-      const pad = (n) => String(n).padStart(2, '0')
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-    }
     const today = todayISO()
-    const addedToday = radarItems.filter((item) => localDay(item.createdAt) === today).length
+    const addedToday = radarItems.filter((item) => localDayOf(item.createdAt) === today).length
     return { total: radarItems.length, addedToday }
   })()
   const radarKeywords = ['GPT', 'Claude', 'Muse', 'Gemini', 'VPS', '家宽IP', '云电脑', '会员', 'API', '服务器', '域名', '代理']
@@ -945,10 +1051,20 @@ function Panel(props) {
   const radarKeywordMatches = (item, word) => word
     ? String(item.title + ' ' + item.excerpt).toLowerCase().includes(word.toLowerCase())
     : true
-  const radarShown = radarVisible
-    .filter((item) => radarKeywordMatches(item, radarKeyword))
-    .slice()
-    .sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0))
+  const radarShown = sortRadarItems(
+    radarVisible
+      .filter((item) => radarKeywordMatches(item, radarKeyword))
+      .filter((item) => radarSince !== 'today' || localDayOf(item.createdAt) === todayISO()),
+    radarOrder
+  )
+
+  const radarKeywordChips = (() => {
+    const top = radarKeywords.slice(0, 8)
+    // 已选中的词即使这一轮计数为 0 也要留在行里，否则刷新后用户没法再取消它。
+    if (radarKeyword && !top.some(([word]) => word === radarKeyword)) return [...top, [radarKeyword, 0]]
+    return top
+  })()
+  const radarFilterActive = Boolean(radarSource || radarCategory || radarQuery || radarKeyword || radarSince)
 
   const radarBody = h('div', { className: 'intel-body intel-radar' },
     // 顶部统计条
@@ -956,28 +1072,50 @@ function Panel(props) {
       h('div', { className: 'intel-stat' },
         h('div', { className: 'intel-stat-label' }, '在库帖子'),
         h('div', { className: 'intel-stat-value' }, radarStats.total,
-          h('span', { className: 'intel-stat-cap' }, ' / 上限 500')),
-        h('div', { className: 'intel-stat-foot' }, '羊毛近 7 天 · 过期自动下版')),
+          h('span', { className: 'intel-stat-cap' }, ` / 上限 ${radarStatus?.limit ?? 500}`)),
+        h('div', { className: 'intel-stat-foot' },
+          `羊毛近 ${radarStatus?.retentionDays ?? 7} 天 · 过期自动下版`)),
       h('div', { className: 'intel-stat' },
         h('div', { className: 'intel-stat-label' }, '今日新增'),
         h('div', { className: 'intel-stat-value intel-stat-accent' }, '+', radarStats.addedToday)),
       h('div', { className: 'intel-stat' },
         h('div', { className: 'intel-stat-label' }, '上次刷新'),
         h('div', { className: 'intel-stat-value intel-stat-time' }, formatWhen(radarFeed.updatedAt)),
+        describeJob(radarStatus?.job) ? h('div', { className: 'intel-stat-foot' }, describeJob(radarStatus?.job)) : null,
         h('div', { className: 'intel-stat-foot' },
-          radarStatus?.nextRunAt ? `下次 ${formatWhen(radarStatus.nextRunAt)}` : '08 / 12 / 16 / 20 点')),
+          radarStatus?.nextRunAt ? `下次 ${formatWhen(radarStatus.nextRunAt)}` : runHoursText)),
       h('div', { className: 'intel-stat-actions' },
         h('button', {
           className: 'intel-btn intel-btn-strong',
           onClick: () => { void refreshRadarNow() },
-          disabled: radarBusy
-        }, radarBusy ? '正在刷新…' : '↻ 刷新'))),
+          disabled: radarRunning,
+          'aria-busy': radarRunning ? 'true' : 'false'
+        }, radarRunning ? `抓取中 ${elapsed}s…` : '↻ 刷新'))),
 
-    // 类别行
+    // 时间 / 排序两行都是真控件（以前「全部内容」那对按钮点了没反应）。
     h('div', { className: 'intel-catrow' },
-      h('span', { className: 'intel-catrow-label' }, '类别'),
-      h('button', { className: 'intel-cat intel-cat-strong', 'data-on': '1' }, '全部内容'),
-      h('button', { className: 'intel-cat', 'data-on': '0' }, '时效羊毛 · 近 7 天')),
+      h('span', { className: 'intel-catrow-label' }, '时间'),
+      h('button', {
+        className: 'intel-cat',
+        'data-on': radarSince ? '0' : '1',
+        onClick: () => setRadarSince('')
+      }, '全部内容'),
+      h('button', {
+        className: 'intel-cat',
+        'data-on': radarSince === 'today' ? '1' : '0',
+        onClick: () => setRadarSince('today')
+      }, `今日新增 · ${radarStats.addedToday}`),
+      h('span', { className: 'intel-catrow-label', style: { marginLeft: '10px' } }, '排序'),
+      h('button', {
+        className: 'intel-cat',
+        'data-on': radarOrder === 'score' ? '1' : '0',
+        onClick: () => setRadarOrder('score')
+      }, '羊毛分从高到低'),
+      h('button', {
+        className: 'intel-cat',
+        'data-on': radarOrder === 'time' ? '1' : '0',
+        onClick: () => setRadarOrder('time')
+      }, '最新发布')),
 
     // 标签 + 搜索
     h('div', { className: 'intel-tagrow' },
@@ -999,10 +1137,22 @@ function Panel(props) {
         placeholder: '搜关键词…',
         'aria-label': '搜索羊毛雷达',
         onChange: (event) => setRadarQuery(event.target.value)
-      })),
+      }),
+      radarFilterActive
+        ? h('button', {
+          className: 'intel-btn intel-btn-ghost',
+          onClick: () => {
+            setRadarSource('')
+            setRadarCategory('')
+            setRadarQuery('')
+            setRadarKeyword('')
+            setRadarSince('')
+          }
+        }, '清空筛选')
+        : null),
 
     // 关键词 chips
-    radarKeywords.length > 0
+    radarKeywordChips.length > 0
       ? h('div', { className: 'intel-kwrow' },
         h('span', { className: 'intel-kwlabel' }, '重点词'),
         h('button', {
@@ -1010,7 +1160,7 @@ function Panel(props) {
           'data-on': radarKeyword ? '0' : '1',
           onClick: () => setRadarKeyword('')
         }, '全部重点'),
-        radarKeywords.slice(0, 8).map(([word, count]) => h('button', {
+        radarKeywordChips.map(([word, count]) => h('button', {
           key: word,
           className: 'intel-kw',
           'data-on': radarKeyword === word ? '1' : '0',
@@ -1020,16 +1170,18 @@ function Panel(props) {
 
     // 区块标题
     h('div', { className: 'intel-band' },
-      '近 7 天羊毛',
+      radarSince === 'today' ? '今日新增羊毛' : `近 ${radarStatus?.retentionDays ?? 7} 天羊毛`,
       h('span', { className: 'intel-band-sub' }, radarShown.length + ' 条')
     ),
 
     radarShown.length === 0
       ? h('div', { className: 'intel-empty' },
-        h('strong', null, radarItems.length === 0 ? '还没有抓到羊毛信息' : '没有符合条件的结果'),
+        h('strong', null, radarItems.length === 0
+          ? '还没有抓到羊毛信息'
+          : (radarSince === 'today' ? '今天还没有新增' : '没有符合条件的结果')),
         h('span', null, radarItems.length === 0
           ? '点右上角「刷新」拉取 LINUX DO、V2EX、NodeSeek、小众软件四个来源。'
-          : '换个来源、标签或关键词试试。'))
+          : (radarSince === 'today' ? '点「全部内容」看近 7 天，或刷新抓一次新的。' : '换个来源、标签或关键词试试。')))
       : h('div', { className: 'intel-feed' }, radarShown.map((item) => h('a', {
         key: item.id || item.url,
         className: 'intel-post',
@@ -1054,39 +1206,49 @@ function Panel(props) {
     ? woolBody
       : tab === 'x'
         ? xBody
-        : tab === 'radar'
-          ? radarBody
-          : cardsBody
+          : tab === 'radar'
+            ? radarBody
+            : cardsBody
+
+  // 错误、提示与服务端版本横幅都放在标签栏下方：任何一页操作都能看到反馈。
+  const strip = (error || notice || serverOutdated)
+    ? h('div', { className: 'intel-strip' },
+      serverOutdated
+        ? h('div', { className: 'intel-notice', role: 'status' },
+          h('span', null, '服务端还是旧版本：新功能要等 Harness 重启才会生效。用菜单「Harness → 重启 Harness」，再把工作台切走切回即可。'))
+        : null,
+      error ? h('p', { className: 'intel-err', style: { margin: 0 } }, error) : null,
+      notice
+        ? h('div', { className: 'intel-notice', role: 'status' },
+          h('span', null, notice),
+          h('button', { className: 'intel-btn intel-btn-ghost', onClick: () => setNotice('') }, '知道了'))
+        : null)
+    : null
 
   const footer = h('div', { className: 'intel-foot' },
     h('div', { className: 'meta' },
       tab === 'wool'
         ? 'Token 羊毛为只读嵌入，领取与规则以 aihot.news 为准'
-        : tab === 'linuxdo'
-          ? `linux.do 榜单由 AI 会话抓取写回 · 上次抓取：${formatWhen(linuxdo.updatedAt)}`
           : tab === 'x'
             ? `X 榜单由 AI 用 web-access 抓取写回 · 上次抓取：${formatWhen(xFeed.updatedAt)}`
             : `上次复核：${formatWhen(state?.lastReviewedAt)} · 数据更新：${formatWhen(state?.updatedAt)}`,
       tab === 'cards' && savedAt ? ` · 已保存 ${formatWhen(savedAt)}` : '',
-      (tab === 'cards' || tab === 'linuxdo' || tab === 'x') && meta?.file
+      (tab === 'cards' || tab === 'x') && meta?.file
         ? h('span', { className: 'intel-muted', style: { display: 'block' } }, `数据文件：${meta.file}`)
         : null),
     tab === 'cards'
       ? h('div', { className: 'intel-actions' },
         h('button', { className: 'intel-btn intel-btn-primary', onClick: () => { void prepareReview() } }, '一键复核最新信息'))
-      : tab === 'linuxdo'
-        ? h('div', { className: 'intel-actions' },
-          h('button', { className: 'intel-btn', onClick: () => { void load() }, disabled: loading }, loading ? '读取中…' : '刷新'),
-          h('button', { className: 'intel-btn intel-btn-primary', onClick: () => { void prepareLinuxdo() } }, '让 AI 抓今天的'))
+
         : tab === 'x'
           ? h('div', { className: 'intel-actions' },
             h('button', { className: 'intel-btn', onClick: () => { void load() }, disabled: loading }, loading ? '读取中…' : '刷新'),
-            h('button', { className: 'intel-btn intel-btn-primary', onClick: () => { void refreshXNow() }, disabled: xBusy }, xBusy ? '正在抓取…' : '立即抓 50 条'),
+            h('button', { className: 'intel-btn intel-btn-primary', onClick: () => { void refreshXNow() }, disabled: xRunning }, xRunning ? `抓取中 ${elapsed}s…` : `立即抓 ${xStatus?.limit ?? X_TOP_LIMIT} 条`),
             h('button', { className: 'intel-btn', onClick: () => { void prepareX() } }, '让 AI 搜'))
           : tab === 'radar'
             ? h('div', { className: 'intel-actions' },
               h('button', { className: 'intel-btn', onClick: () => { void load() }, disabled: loading }, loading ? '读取中…' : '刷新列表'),
-              h('button', { className: 'intel-btn intel-btn-primary', onClick: () => { void refreshRadarNow() }, disabled: radarBusy }, radarBusy ? '正在抓取…' : '立即抓一次'))
+              h('button', { className: 'intel-btn intel-btn-primary', onClick: () => { void refreshRadarNow() }, disabled: radarRunning }, radarRunning ? `抓取中 ${elapsed}s…` : '立即抓一次'))
             : h('div', { className: 'intel-actions' },
               h('button', {
                 className: 'intel-btn',
@@ -1103,13 +1265,17 @@ function Panel(props) {
           '会话正在准备中。如果一直没有内容，关掉抽屉后用左侧栏「新会话」创建，再回来打开。')))
     : null
 
+  const promptTitle = promptKind === 'review' ? '复核提示词已生成' : '抓取指令已生成'
+  const promptHint = promptKind === 'review'
+    ? '把它发到本工作台的会话里，Agent 会联网核实并直接写回卡片数据文件；完成后回到这里点「刷新」。'
+    : '把它发到本工作台的会话里，Agent 会按指令抓取并写回数据文件；完成后回到这里点「刷新」。'
+
   const modal = promptText
-    ? h('div', { className: 'intel-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': '复核提示词' },
+    ? h('div', { className: 'intel-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': promptTitle },
       h('div', { className: 'intel-modal-box' },
-        h('header', null, '复核提示词已生成'),
+        h('header', null, promptTitle),
         h('div', { className: 'body' },
-          h('p', { style: { margin: '0 0 8px' } },
-            '把它发到本工作台的会话里，Agent 会联网核实并直接写回卡片数据文件；完成后回到这里点「刷新」。'),
+          h('p', { style: { margin: '0 0 8px' } }, promptHint),
           copied ? h('p', { className: 'intel-muted', style: { margin: '0 0 8px' } }, copied) : null,
           h('pre', { className: 'intel-pre' }, promptText)),
         h('footer', null,
@@ -1121,16 +1287,24 @@ function Panel(props) {
           }, '打开 AI 对话'))))
     : null
 
+  const tabLabel = (tabDefs.find((item) => item.id === tab) || tabDefs[0]).label
+
   if (loading && !state) {
     return h('div', { className: 'intel' },
       h('div', { className: 'intel-main' },
         header,
         tabs,
+        strip,
         h('div', { className: 'intel-body' }, h('div', { className: 'intel-empty' }, h('strong', null, '正在读取情报数据…')))))
   }
 
   return h('div', { className: 'intel' },
-    h('div', { className: 'intel-main' }, header, tabs, body, footer),
+    h('div', { className: 'intel-main' },
+      header,
+      tabs,
+      strip,
+      h('div', { className: 'intel-panel', role: 'tabpanel', 'aria-label': tabLabel }, body),
+      footer),
     drawer,
     modal)
 }
