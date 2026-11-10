@@ -1,0 +1,52 @@
+{
+  "name": "dsh-workbench-intel-center",
+  "version": "1.21.0",
+  "private": true,
+  "description": "羊毛大王：按关注主题持续收集、核实并结构化呈现最新信息，卡片可直接备注、标记状态并一键复核。",
+  "type": "module",
+  "license": "MIT",
+  "author": "smart-flow",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ttttstc/dsh-workbench-intel-center.git"
+  },
+  "main": "./dsh/server.js",
+  "exports": {
+    ".": "./dsh/server.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "dsh/",
+    "lib/",
+    "src/shared/",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "devDependencies": {
+    "react": "^18.3.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "dsh-desktop-workbenches"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "test": "node --test test/model.test.js test/core.test.js test/store.test.js test/server.test.js test/wool.test.js test/crawler.test.js test/schedule.test.js test/sources.test.js",
+    "check": "node scripts/check-workbench-package.mjs",
+    "verify": "node scripts/build-client.mjs && node --test test/model.test.js test/core.test.js test/store.test.js test/server.test.js test/wool.test.js && node scripts/check-workbench-package.mjs",
+    "pack:local": "pnpm pack"
+  }
+}

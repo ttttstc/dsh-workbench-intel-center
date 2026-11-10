@@ -1,0 +1,7 @@
+# 智能信息情报中心（dsh-workbench-intel-center）
+# 把服务端入口插入 Harness 插件树；卡片数据放在 DSH 数据目录下，卸载工作台不会删除它。
+- insert:
+    - id: intel-center
+      name: dsh-workbench-intel-center
+      config:
+        root: !!js dshHomePath('intel-center')
