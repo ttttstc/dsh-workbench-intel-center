@@ -2,8 +2,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createJob, lastRunOf } from '../dsh/jobs.js'
 
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
-
 test('任务从 idle 进 running，结束后 succeeded 并保留结果', async () => {
   let release = () => {}
   const gate = new Promise((resolve) => { release = resolve })
@@ -57,17 +55,20 @@ test('失败被记成 failed，并保留可读原因', async () => {
 })
 
 test('超过 timeoutMs 仍未结束的任务标记为失败，不永远停在 running', async () => {
-  // 用可控的 gate 而不是 new Promise(() => {})：测试结束时必须让挂起的 promise 落地，
-  // 否则 Node 20 的 test runner 会判定「promise 仍未结算，事件循环却已空」而直接判失败。
-  let release = () => {}
-  const gate = new Promise((resolve) => { release = resolve })
-  const job = createJob({ timeoutMs: 20, run: () => gate })
+  // 注意：createJob 的超时定时器是 unref 的，如果 run() 永远不结算，事件循环会先空掉，
+  // Node 20 的 test runner 就会报「promise 仍未结算」。所以这里让 run 用一个正常的（ref 的）
+  // 定时器在超时之后才结算：既验证超时判定，又不给测试留下悬空 promise。
+  const job = createJob({
+    timeoutMs: 20,
+    run: () => new Promise((resolve) => setTimeout(() => resolve({ count: 1 }), 60))
+  })
   job.start('manual')
   const snapshot = await job.wait()
   assert.equal(snapshot.status, 'failed')
   assert.match(snapshot.error, /超过/)
   assert.equal(job.running, false)
-  release({ count: 0 })
+  // 等 run 自己落地，测试结束时不留挂起 promise。
+  await new Promise((resolve) => setTimeout(resolve, 70))
 })
 
 test('lastRunOf 在没跑过时给出 ok:null 的历史形状', () => {
@@ -86,23 +87,24 @@ test('成功后 lastRunOf 兼容旧接口：ok / count / reason', async () => {
   assert.match(last.error, /V2EX 超时/)
 })
 
-test('late 结果不覆盖新一轮：token 失效后忽略', async () => {
-  const releases = []
+test('late 结果不覆盖新一轮：上一轮的迟到结果被忽略', async () => {
+  let call = 0
   const job = createJob({
-    timeoutMs: 50,
-    run: () => new Promise((resolve) => { releases.push(resolve) })
+    timeoutMs: 30,
+    // 第一轮 60ms 才返回（会先超时），第二轮 10ms 返回；都用普通定时器，测试结束前必然结算。
+    run: () => {
+      call += 1
+      const round = call
+      return new Promise((resolve) => setTimeout(() => resolve({ count: round }), round === 1 ? 60 : 10))
+    }
   })
   job.start('manual')
-  await flush()
-  assert.equal(job.snapshot().status, 'running')
-  // 超时后进入 failed，此时再启动第二轮；第一轮之后才 resolve，不应把状态改回去。
-  await job.wait()
-  assert.equal(job.snapshot().status, 'failed')
-  job.start('manual')
-  releases[0]({ count: 99 })
-  await flush()
-  assert.equal(job.snapshot().status, 'running', '第一轮的迟到结果不能改写第二轮状态')
-  // 收尾：第二轮也要结算，否则测试结束时会留下挂起的 promise（Node 20 会因此判失败）。
-  releases[1]({ count: 1 })
-  await job.wait()
+  const first = await job.wait() // 30ms 超时 → failed
+  assert.equal(first.status, 'failed')
+  job.start('manual') // 立刻开第二轮
+  await new Promise((resolve) => setTimeout(resolve, 90)) // 等第一轮的迟到结果也落地
+  const snapshot = job.snapshot()
+  assert.equal(snapshot.status, 'succeeded', '第二轮应成功')
+  assert.equal(snapshot.result.count, 2, '第一轮的迟到结果不能覆盖第二轮')
+  assert.equal(snapshot.runs, 2)
 })
