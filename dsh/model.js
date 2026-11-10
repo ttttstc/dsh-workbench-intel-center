@@ -6,6 +6,7 @@
  */
 
 export const MAX_CARDS = 500
+export const MAX_FEED_ITEMS = 500
 export const MAX_SUMMARY = 6
 export const MAX_FACTS = 12
 export const MAX_LIST = 8
@@ -15,6 +16,12 @@ export const MAX_TEXT = 400
 
 export const STATUSES = ['confirmed', 'pending']
 export const FLAGS = ['none', 'watch', 'shortlist', 'used', 'dropped']
+
+/**
+ * 三份外部榜单（linux.do / X / 羊毛雷达）由抓取任务与 Agent 写，卡片与主题由用户写。
+ * 两边的写入通道不同（界面 POST 整份状态 vs. Agent 直接改文件），所以谁拥有哪个字段要写死在这里。
+ */
+export const FEED_KEYS = ['linuxdo', 'x', 'radar']
 
 export class ValidationError extends Error {
   constructor(message, status = 400) {
@@ -99,7 +106,7 @@ function normalizeCard(raw, index) {
   const verifiedAt = isDate(text(raw.verifiedAt, 10)) ? text(raw.verifiedAt, 10) : ''
 
   return {
-    id: text(raw.id, 64) || `card-${index + 1}`,
+    id: text(raw.id, 64),
     title,
     category: text(raw.category, 40) || '未分类',
     tags: textList(raw.tags, 8, 24),
@@ -175,13 +182,18 @@ function normalizeFeedItem(raw, index, prefix) {
 }
 
 function normalizeFeed(raw, prefix = 'feed') {
-  if (!isPlainObject(raw)) return { updatedAt: '', date: '', keywords: [], items: [] }
+  if (!isPlainObject(raw)) return emptyFeed()
   const items = []
+  const seen = new Set()
   if (Array.isArray(raw.items)) {
     for (const [i, item] of raw.items.entries()) {
       const next = normalizeFeedItem(item, i, prefix)
-      if (next) items.push(next)
-      if (items.length >= 500) break
+      if (!next) continue
+      // id 撞车会让界面列表 key 重复、排名错乱；重复的只留第一条。
+      if (seen.has(next.id)) continue
+      seen.add(next.id)
+      items.push(next)
+      if (items.length >= MAX_FEED_ITEMS) break
     }
   }
   return {
@@ -192,6 +204,26 @@ function normalizeFeed(raw, prefix = 'feed') {
   }
 }
 
+function emptyFeed() {
+  return { updatedAt: '', date: '', keywords: [], items: [] }
+}
+
+/**
+ * 卡片缺 id 时的稳定身份：由标题 + 分类算哈希。
+ *
+ * 以前用「第几张卡片」当 id，Agent 每写回一次、顺序一变，id 全变，
+ * 提示词里「按 id 更新，不要改 id」就落空了，界面上的展开态与引用也跟着错位。
+ */
+function stableCardId(card) {
+  const seed = `${card.title}|${card.category}`
+  let hash = 2166136261
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `card-${(hash >>> 0).toString(36)}`
+}
+
 /** 把任意输入规整成合法状态；结构性错误直接抛 ValidationError。 */
 export function normalizeState(raw) {
   if (!isPlainObject(raw)) throw new ValidationError('状态必须是一个对象。')
@@ -199,12 +231,22 @@ export function normalizeState(raw) {
   const cardsRaw = Array.isArray(raw.cards) ? raw.cards : []
   if (cardsRaw.length > MAX_CARDS) throw new ValidationError(`卡片数量超过上限 ${MAX_CARDS} 张。`)
 
-  const cards = cardsRaw.map(normalizeCard)
-
+  const cards = []
   const seen = new Set()
-  for (const card of cards) {
-    if (seen.has(card.id)) throw new ValidationError(`卡片 id 重复：${card.id}`)
-    seen.add(card.id)
+  for (const [index, item] of cardsRaw.entries()) {
+    const card = normalizeCard(item, index)
+    const given = card.id
+    let id = given || stableCardId(card)
+    if (seen.has(id)) {
+      // 显式写了重复 id 是数据错误，要报出来；自动生成的撞车（同标题同分类）只加后缀。
+      if (given) throw new ValidationError(`卡片 id 重复：${id}`)
+      let suffix = 2
+      while (seen.has(`${id}-${suffix}`)) suffix += 1
+      id = `${id}-${suffix}`
+    }
+    card.id = id
+    seen.add(id)
+    cards.push(card)
   }
 
   const topics = []
@@ -228,7 +270,75 @@ export function normalizeState(raw) {
   }
 }
 
+/**
+ * 合并一次「整份状态」写入。
+ *
+ * 界面每次保存都会把整份状态发回来，包括它读到的那份榜单。若直接覆盖：用户在抓取任务
+ * 刚写完榜单后改一张卡片的备注，就会把刚抓到的条目悄悄抹掉（反过来 Agent 写文件也可能
+ * 覆盖用户刚改的备注）。规则在这里写死——
+ * - 卡片 / 主题 / lastReviewedAt 归用户，永远采用来件；
+ * - 三份榜单归抓取任务与 Agent，只有来件的 updatedAt 确实更新时才采用，否则沿用磁盘上的。
+ * 想清空某份榜单，就带着新的 updatedAt 写一份空 items（这是明确意图，不会被当成旧数据）。
+ */
+export function mergeState(current, incoming) {
+  const stored = isPlainObject(current) ? current : {}
+  const next = { ...(isPlainObject(incoming) ? incoming : {}) }
+  for (const key of FEED_KEYS) {
+    const kept = stored[key]
+    const sent = next[key]
+    if (!isPlainObject(sent)) {
+      if (kept) next[key] = kept
+      continue
+    }
+    const keptAt = Date.parse(kept?.updatedAt || '')
+    const sentAt = Date.parse(sent.updatedAt || '')
+    const newer = Number.isFinite(sentAt) && (!Number.isFinite(keptAt) || sentAt > keptAt)
+    if (!newer) next[key] = kept || sent
+  }
+  return next
+}
+
+/**
+ * 读取磁盘时的容错：一条缺标题或 id 重复的卡片，不该让整份文件打不开、连带所有抓取失败。
+ * 写入仍走 normalizeState 的严格校验（坏数据进不了库）；这里只处理「已经坏在磁盘上」的情况，
+ * 把坏卡片丢掉并报告丢了几张。
+ */
+export function normalizeStoredState(raw) {
+  try {
+    return { state: normalizeState(raw), dropped: 0 }
+  } catch (error) {
+    if (!(error instanceof ValidationError)) throw error
+  }
+  const storedCards = Array.isArray(raw?.cards) ? raw.cards.slice(0, MAX_CARDS) : []
+  const cards = []
+  const seen = new Set()
+  for (const item of storedCards) {
+    let card
+    try {
+      card = normalizeCard(item, cards.length)
+    } catch {
+      continue
+    }
+    const id = card.id || stableCardId(card)
+    if (seen.has(id)) continue
+    card.id = id
+    seen.add(id)
+    cards.push(card)
+  }
+  const state = normalizeState({ ...raw, cards })
+  return { state, dropped: storedCards.length - cards.length }
+}
+
 /** 供客户端/测试使用的空状态。 */
 export function emptyState() {
-  return { version: 1, cards: [], topics: [], lastReviewedAt: '', updatedAt: '' }
+  return {
+    version: 1,
+    cards: [],
+    topics: [],
+    linuxdo: emptyFeed(),
+    x: emptyFeed(),
+    radar: emptyFeed(),
+    lastReviewedAt: '',
+    updatedAt: ''
+  }
 }

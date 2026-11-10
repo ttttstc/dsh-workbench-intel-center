@@ -34,6 +34,7 @@ export function stripScripts(html) {
 
 export function createWoolFetcher({ url = WOOL_URL, origin = WOOL_ORIGIN, ttl = CACHE_TTL_MS, timeoutMs = 15000 } = {}) {
   let cached = null
+  let inflight = null
 
   async function fetchFresh() {
     const controller = new AbortController()
@@ -54,13 +55,34 @@ export function createWoolFetcher({ url = WOOL_URL, origin = WOOL_ORIGIN, ttl = 
     }
   }
 
+  async function load() {
+    const value = await fetchFresh()
+    // TTL 从抓取完成时算起，否则抓多久就少缓存多久。
+    cached = { at: Date.now(), value }
+    return value
+  }
+
   return async function get({ force = false } = {}) {
-    const now = Date.now()
-    if (!force && cached && now - cached.at < ttl) {
+    if (!force && cached && Date.now() - cached.at < ttl) {
       return { ...cached.value, cached: true }
     }
-    const value = await fetchFresh()
-    cached = { at: now, value }
-    return { ...value, cached: false }
+    // 并发请求共用同一次上游抓取：接口被连点或两个视图同时打开时不会重复打源站。
+    if (inflight) {
+      const value = await inflight
+      return { ...value, cached: true }
+    }
+    inflight = load()
+    try {
+      const value = await inflight
+      return { ...value, cached: false }
+    } catch (error) {
+      // 抓不到新页面时，旧缓存比一张 502 错误页有用。
+      if (cached) {
+        return { ...cached.value, cached: true, stale: true, error: String(error?.message || error) }
+      }
+      throw error
+    } finally {
+      inflight = null
+    }
   }
 }

@@ -3,15 +3,25 @@
  *
  * 与 server.js 分开的原因：server.js 必须静态导入宿主的 Schemastery（Config 的要求），
  * 而这份逻辑没有任何外部依赖，可以脱离宿主直接用 node --test 跑真实请求。
+ *
+ * 抓取这类几十秒到几分钟的任务不再占住 HTTP 请求：POST 只负责启动，状态与结果从
+ * /radar/status、/x/status 读（见 jobs.js）。界面据此轮询，失败原因也留在状态里，
+ * 不再只剩一句笼统文案。
  */
 import { MAX_STATE_BYTES, createIntelStore } from './store.js'
-import { ValidationError } from './model.js'
+import { ValidationError, mergeState, normalizeState } from './model.js'
 import { WOOL_ORIGIN, WOOL_URL, createWoolFetcher, prepareEmbedHtml } from './wool.js'
 import { DEFAULT_KEYWORDS, crawlBrowserFeeds, crawlX } from './crawler.js'
 import { RUN_HOURS, createRefreshScheduler, nextRunAt } from './schedule.js'
-import { MAX_AGE_DAYS, SOURCES, buildRadar, collectServerSources } from './sources.js'
+import { MAX_AGE_DAYS, MAX_RADAR_ITEMS, SOURCES, buildRadar, collectServerSources } from './sources.js'
+import { createJob, lastRunOf } from './jobs.js'
+import { API_VERSION, X_TOP_LIMIT, todayISO } from '../src/shared/core.js'
 
 const PREFIX = '/api/intel-center'
+const RADAR_KEYWORDS = ['免费', '限免', '优惠']
+
+/** 同一数据目录只允许一个调度器：插件被重复 apply 时不会一天跑两遍抓取。 */
+const schedulers = new Map()
 
 async function readJsonBody(request) {
   const declared = Number(request.headers.get('content-length'))
@@ -43,165 +53,162 @@ async function readJsonBody(request) {
   }
 }
 
-export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center') {
-  const store = createIntelStore(config.root)
+/**
+ * @param ctx 宿主上下文（只用 ctx.connection.fetch.register 与 ctx.effect）
+ * @param config 插件配置（root：数据目录）
+ * @param pluginName 插件名，meta 接口会回显
+ * @param deps 可替换依赖，仅测试用：store / now / collectServerSources / crawlBrowserFeeds / crawlX / keywords / jobTimeoutMs / startScheduler
+ */
+export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center', deps = {}) {
+  const store = deps.store || createIntelStore(config.root)
+  const now = deps.now || (() => new Date())
+  const keywords = Array.isArray(deps.keywords) && deps.keywords.length ? deps.keywords : DEFAULT_KEYWORDS
+  const fetchServerSources = deps.collectServerSources || collectServerSources
+  const fetchBrowserFeeds = deps.crawlBrowserFeeds || crawlBrowserFeeds
+  const fetchX = deps.crawlX || crawlX
+  const jobTimeoutMs = Number.isFinite(deps.jobTimeoutMs) ? deps.jobTimeoutMs : 300000
   const noStore = { 'cache-control': 'no-store' }
   const json = (payload, status = 200) => Response.json(payload, { status, headers: noStore })
   const fail = (error, fallback) => {
     const known = error instanceof ValidationError
-    return json({ error: known ? error.message : fallback }, known ? error.status : 500)
+    if (!known) console.error(`[intel-center] ${fallback}`, error)
+    const body = { error: known ? error.message : fallback }
+    // 本机接口，把原始原因一并回传，界面与 Agent 都能看懂到底哪一步坏了。
+    if (!known) body.detail = String(error?.message || error)
+    return json(body, known ? error.status : 500)
   }
 
-  // ---- X 榜单：手动刷新 + 每天 09:00 / 14:00 / 21:00 自动刷新 ----
-  let lastXRun = { at: '', ok: null, count: 0, error: '', reason: '' }
-  let nextXRunAt = nextRunAt(new Date())
-  let xRunning = false
+  let nextRunAtValue = nextRunAt(now(), RUN_HOURS)
 
-  async function refreshX(reason) {
-    if (xRunning) return { ok: false, skipped: true, reason: 'already-running', count: lastXRun.count }
-    xRunning = true
-    const startedAt = new Date().toISOString()
-    try {
-      const { items, errors, scanned } = await crawlX({ keywords: DEFAULT_KEYWORDS, limit: 500 })
-      const current = await store.read()
-      // 与历史合并：X 单页能拿到的新帖有限，按 id 去重后保留点赞最高的 50 条，榜单会逐次累积。
-      const byId = new Map()
-      for (const item of current.x?.items || []) if (item?.id) byId.set(item.id, item)
-      for (const item of items) if (item?.id) byId.set(item.id, { ...byId.get(item.id), ...item })
-      const merged = [...byId.values()]
-        .sort((a, b) => (b.likes || 0) - (a.likes || 0))
-        .slice(0, 500)
-        .map((item, index) => ({ ...item, rank: index + 1 }))
-      await store.write({
-        ...current,
-        x: {
-          updatedAt: startedAt,
-          date: startedAt.slice(0, 10),
-          keywords: DEFAULT_KEYWORDS,
-          items: merged
-        },
-        updatedAt: startedAt
-      })
-      lastXRun = { at: startedAt, ok: true, count: merged.length, error: errors.join('；'), reason }
-      return { ok: true, count: merged.length, fresh: items.length, scanned, errors, reason }
-    } catch (error) {
-      lastXRun = { at: startedAt, ok: false, count: 0, error: String(error?.message || error), reason }
-      throw error
-    } finally {
-      xRunning = false
-    }
-  }
-
-  // ---- 羊毛雷达：V2EX / 小众软件（直连）+ linux.do / NodeSeek（浏览器） ----
-  let lastRadarRun = { at: '', ok: null, count: 0, error: '', reason: '' }
-  let nextRadarRunAt = nextRunAt(new Date())
-  let radarRunning = false
-
-  let browserFilling = false
-
+  // ---- 羊毛雷达：V2EX / 小众软件（直连）+ LINUX DO / NodeSeek（浏览器） ----
   /** 把一批原始条目合并进 state.radar（保留近 7 天，自动去重与淘汰）。 */
   async function mergeIntoRadar(rawItems, at) {
     const current = await store.read()
     const merged = buildRadar([...(current.radar?.items || []), ...rawItems], {
-      now: Date.parse(at),
+      now: Date.parse(at) || now().getTime(),
       days: MAX_AGE_DAYS
     })
     await store.write({
       ...current,
       radar: {
         updatedAt: at,
-        date: at.slice(0, 10),
-        keywords: ['免费', '限免', '优惠'],
+        date: todayISO(new Date(at)),
+        keywords: RADAR_KEYWORDS,
         items: merged
-      },
-      updatedAt: at
+      }
     })
     return merged
   }
 
-  /** 浏览器通道：NodeSeek 必走；LINUX DO 直连被拦时也能兜住。抓完直接并进榜单。 */
-  function fillFromBrowser(reason) {
-    if (browserFilling) return
-    browserFilling = true
-    setTimeout(async () => {
-      try {
-        const browser = await crawlBrowserFeeds({ log: () => {} })
-        const at = new Date().toISOString()
-        const merged = await mergeIntoRadar(browser.items, at)
-        lastRadarRun = {
-          ...lastRadarRun,
-          at,
-          count: merged.length,
-          browserCount: browser.items.length,
-          error: [lastRadarRun.error, ...(browser.errors || [])].filter(Boolean).join('；'),
-          reason
-        }
-      } catch (error) {
-        lastRadarRun = {
-          ...lastRadarRun,
-          error: [lastRadarRun.error, `浏览器补抓：${error?.message || error}`].filter(Boolean).join('；')
-        }
-      } finally {
-        browserFilling = false
-      }
-    }, 0)
+  async function runRadar(reason) {
+    const startedAt = now().toISOString()
+    // 先抓能直连的源，再借浏览器补 linux.do / NodeSeek；浏览器失败不影响直连结果。
+    const server = await fetchServerSources()
+    const browser = await fetchBrowserFeeds({ log: () => {} })
+      .catch((error) => ({ items: [], errors: [String(error?.message || error)] }))
+    const all = [...(server.items || []), ...(browser.items || [])]
+    const errors = [...(server.errors || []), ...(browser.errors || [])]
+    const merged = await mergeIntoRadar(all, startedAt)
+    const bySource = {}
+    for (const item of all) {
+      if (!item?.source) continue
+      bySource[item.source] = (bySource[item.source] || 0) + 1
+    }
+    return {
+      ok: true,
+      count: merged.length,
+      fresh: all.length,
+      serverCount: (server.items || []).length,
+      browserCount: (browser.items || []).length,
+      bySource,
+      errors,
+      reason
+    }
   }
 
-  async function refreshRadar(reason = 'manual') {
-    if (radarRunning) return { ok: false, skipped: true, reason: 'already-running', count: lastRadarRun.count }
-    radarRunning = true
-    const startedAt = new Date().toISOString()
-    try {
-      // 先抓三个直连源并立刻落库，界面刷新马上能看到结果。
-      const server = await collectServerSources()
-      // 全量：直连 + 浏览器通道一次跑完再返回，避免「刷新后还要等后台补」。
-      const browser = await crawlBrowserFeeds({ log: () => {} }).catch((error) => ({ items: [], errors: [String(error?.message || error)] }))
-      const all = [...server.items, ...browser.items]
-      const allErrors = [...(server.errors || []), ...(browser.errors || [])]
-      const merged = await mergeIntoRadar(all, startedAt)
-      lastRadarRun = {
-        at: startedAt,
-        ok: true,
-        count: merged.length,
-        error: allErrors.join('；'),
-        reason
+  // ---- X 榜单：同一套流程，只是来源是 X 搜索页 ----
+  async function runX(reason) {
+    const startedAt = now().toISOString()
+    const { items, errors, scanned } = await fetchX({ keywords, limit: X_TOP_LIMIT })
+    const current = await store.read()
+    // 与历史合并：X 单页每次只能拿到一部分，按 id 去重后保留最新（按发布时间倒序）的 N 条。
+    // 取最近的不取点赞最高的：用户要的是「最近有什么羊毛」，点赞量仍然显示在卡片上。
+    const byId = new Map()
+    for (const item of current.x?.items || []) if (item?.id) byId.set(item.id, item)
+    for (const item of items) if (item?.id) byId.set(item.id, { ...byId.get(item.id), ...item })
+    const merged = [...byId.values()]
+      .sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0))
+      .slice(0, X_TOP_LIMIT)
+      .map((item, index) => ({ ...item, rank: index + 1 }))
+    await store.write({
+      ...current,
+      x: {
+        updatedAt: startedAt,
+        date: todayISO(new Date(startedAt)),
+        keywords,
+        items: merged
       }
-      return {
-        ok: true,
-        count: merged.length,
-        fresh: all.length,
-        errors: allErrors,
-        browserPending: false,
-        reason
-      }
-    } catch (error) {
-      lastRadarRun = { at: startedAt, ok: false, count: 0, error: String(error?.message || error), reason }
-      throw error
-    } finally {
-      radarRunning = false
-    }
+    })
+    return { ok: true, count: merged.length, fresh: items.length, scanned, errors, reason }
   }
+
+  const logFailure = (label) => (snapshot) => {
+    if (snapshot.status === 'failed') console.error(`[intel-center] ${label}失败：${snapshot.error}`)
+  }
+
+  let radarReason = 'manual'
+  const radarJob = createJob({
+    name: 'radar',
+    now,
+    timeoutMs: jobTimeoutMs,
+    run: () => runRadar(radarReason),
+    onSettled: logFailure('羊毛雷达刷新')
+  })
+  let xReason = 'manual'
+  const xJob = createJob({
+    name: 'x',
+    now,
+    timeoutMs: jobTimeoutMs,
+    run: () => runX(xReason),
+    onSettled: logFailure('X 榜单刷新')
+  })
+
+  function startRadar(reason = 'manual') {
+    radarReason = reason === 'scheduled' ? 'scheduled' : 'manual'
+    return radarJob.start(radarReason)
+  }
+
+  function startX(reason = 'manual') {
+    xReason = reason === 'scheduled' ? 'scheduled' : 'manual'
+    return xJob.start(xReason)
+  }
+
+  // 一个调度器同时负责两份榜单：时间表只有 RUN_HOURS 一处真相，先雷达后 X，串行执行。
   const scheduler = createRefreshScheduler({
+    now,
     run: async () => {
-      // 每 4 小时：先抓能直连的来源（V2EX / 小众软件），再尽力补 X（CDP）。
-      try {
-        await refreshRadar('scheduled')
-      } catch {
-        /* 记录在 lastRadarRun 里 */
-      }
-      try {
-        await refreshX('scheduled')
-      } catch {
-        /* 记录在 lastXRun 里 */
-      }
+      startRadar('scheduled')
+      await radarJob.wait()
+      startX('scheduled')
+      await xJob.wait()
     },
     onScheduled: (next) => {
-      nextXRunAt = next
-      nextRadarRunAt = next
+      nextRunAtValue = next
     }
   })
-  scheduler.start()
-  if (typeof ctx.effect === 'function') ctx.effect(() => () => scheduler.stop())
+  const schedulerKey = String(config.root)
+  if (deps.startScheduler !== false) {
+    const previous = schedulers.get(schedulerKey)
+    if (previous && previous !== scheduler) previous.stop()
+    schedulers.set(schedulerKey, scheduler)
+    scheduler.start()
+  }
+  if (typeof ctx.effect === 'function') {
+    ctx.effect(() => () => {
+      scheduler.stop()
+      if (schedulers.get(schedulerKey) === scheduler) schedulers.delete(schedulerKey)
+    })
+  }
 
   ctx.connection.fetch.register({
     path: `${PREFIX}/radar/status`,
@@ -209,12 +216,14 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center') {
     requestBody: 'buffered',
     async fetch() {
       return json({
-        nextRunAt: nextRadarRunAt.toISOString(),
+        nextRunAt: nextRunAtValue.toISOString(),
         hours: RUN_HOURS,
-        running: radarRunning,
+        running: radarJob.running,
         retentionDays: MAX_AGE_DAYS,
+        limit: MAX_RADAR_ITEMS,
         sources: SOURCES,
-        last: lastRadarRun
+        job: radarJob.snapshot(),
+        last: lastRunOf(radarJob)
       })
     }
   })
@@ -223,13 +232,10 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center') {
     path: `${PREFIX}/radar/refresh`,
     methods: ['POST'],
     requestBody: 'buffered',
-    async fetch() {
-      try {
-        const payload = await readJsonBody(request).catch(() => ({}))
-        return json(await refreshRadar(payload?.reason === 'scheduled' ? 'scheduled' : 'manual'))
-      } catch (error) {
-        return fail(error, '抓取羊毛雷达失败。')
-      }
+    async fetch(request) {
+      const payload = await readJsonBody(request).catch(() => ({}))
+      const started = startRadar(payload?.reason === 'scheduled' ? 'scheduled' : 'manual')
+      return json(started, started.started ? 202 : 200)
     }
   })
 
@@ -239,11 +245,12 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center') {
     requestBody: 'buffered',
     async fetch() {
       return json({
-        nextRunAt: nextXRunAt.toISOString(),
-        hours: [9, 14, 21],
-        running: xRunning,
-        limit: 500,
-        last: lastXRun
+        nextRunAt: nextRunAtValue.toISOString(),
+        hours: RUN_HOURS,
+        running: xJob.running,
+        limit: X_TOP_LIMIT,
+        job: xJob.snapshot(),
+        last: lastRunOf(xJob)
       })
     }
   })
@@ -253,13 +260,9 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center') {
     methods: ['POST'],
     requestBody: 'buffered',
     async fetch(request) {
-      try {
-        const payload = await readJsonBody(request).catch(() => ({}))
-        const reason = payload?.reason === 'scheduled' ? 'scheduled' : 'manual'
-        return json(await refreshX(reason))
-      } catch (error) {
-        return fail(error, '抓取 X 失败：请确认 Chrome 已开启远程调试，且 web-access 的 CDP 代理在运行。')
-      }
+      const payload = await readJsonBody(request).catch(() => ({}))
+      const started = startX(payload?.reason === 'scheduled' ? 'scheduled' : 'manual')
+      return json(started, started.started ? 202 : 200)
     }
   })
 
@@ -269,7 +272,7 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center') {
     requestBody: 'buffered',
     async fetch() {
       try {
-        return json({ plugin: pluginName, version: 1, ...(await store.meta()) })
+        return json({ plugin: pluginName, version: 1, apiVersion: API_VERSION, ...(await store.meta()) })
       } catch (error) {
         return fail(error, '无法读取情报数据位置。')
       }
@@ -284,8 +287,20 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center') {
       try {
         if (request?.method === 'POST') {
           const payload = await readJsonBody(request)
-          const { state, bytes } = await store.write(payload)
-          return json({ state, bytes })
+          const current = await store.read()
+          // 整份覆盖会丢掉刚抓到的榜单：卡片归用户、榜单归抓取任务，按 mergeState 的规则合并后再写。
+          let merged = mergeState(current, payload)
+          let conflict = false
+          if (payload?.baseUpdatedAt && current.updatedAt && payload.baseUpdatedAt !== current.updatedAt) {
+            // 界面读完之后文件被别处（Agent 或另一个窗口）改过：卡片按 id 合并，谁都不覆盖谁。
+            conflict = true
+            const incoming = normalizeState(merged)
+            const ids = new Set(incoming.cards.map((card) => card.id))
+            const extra = current.cards.filter((card) => !ids.has(card.id))
+            merged = extra.length ? { ...incoming, cards: [...incoming.cards, ...extra] } : incoming
+          }
+          const { state, bytes } = await store.write(merged)
+          return json({ state, bytes, conflict })
         }
         return json({ state: await store.read() })
       } catch (error) {
@@ -296,7 +311,7 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center') {
 
   // Token 羊毛：源站带 X-Frame-Options: SAMEORIGIN，直接 iframe 会被拦，
   // 这里取回 HTML、注入 <base> 后由本机同源转发，前端用沙箱 iframe 展示。
-  const getWool = createWoolFetcher()
+  const getWool = deps.woolFetcher || createWoolFetcher()
 
   ctx.connection.fetch.register({
     path: `${PREFIX}/wool`,
@@ -339,4 +354,6 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center') {
       }
     }
   })
+
+  return { store, radarJob, xJob, scheduler, startRadar, startX }
 }

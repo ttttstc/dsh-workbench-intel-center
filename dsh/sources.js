@@ -35,6 +35,8 @@ export const CATEGORIES = [
 ]
 
 export const MAX_AGE_DAYS = 7
+/** 雷达在库上限：一处定义，抓取合并、接口状态与界面文案共用。 */
+export const MAX_RADAR_ITEMS = 500
 
 const NOISE = ['招聘', '求职', '面试', '房源', '租房', '征友']
 
@@ -291,7 +293,7 @@ export function scoreWool(item, { now = Date.now() } = {}) {
   if (item.source === 'appinn') score += 4
   if (item.source === 'v2ex') score += 3
   score = Math.max(1, Math.min(100, Math.round(score)))
-  return { score, verdict: verifyFree(text).verdict, verified: verifyFree(text).verdict === 'free' }
+  return { score, verdict: verdictInfo.verdict, verified: verdictInfo.verdict === 'free' }
 }
 
 
@@ -299,7 +301,7 @@ export function scoreWool(item, { now = Date.now() } = {}) {
  * 收录与排序：只留近 7 天、命中关键词、非噪声的条目；
  * 先按 限免 > 免费 > 低价，同标签内按发布时间倒序。
  */
-export function buildRadar(rawItems, { now = Date.now(), days = MAX_AGE_DAYS, limit = 500 } = {}) {
+export function buildRadar(rawItems, { now = Date.now(), days = MAX_AGE_DAYS, limit = MAX_RADAR_ITEMS } = {}) {
   const byUrl = new Map()
   for (const raw of rawItems) {
     if (!raw?.url || !raw?.title) continue
@@ -324,10 +326,11 @@ export function buildRadar(rawItems, { now = Date.now(), days = MAX_AGE_DAYS, li
   }
   return [...byUrl.values()]
     .sort((a, b) => {
-      // 羊毛分优先（分数接近时再看时间），让「真香」的排前面。
+      // 羊毛分从高到低；同分再看时间。必须是可传递的全序：
+      // 以前写成「差值 ≥5 才比分数」，比较函数不满足传递性，排出来的顺序是随机的。
       const sa = a.score || 0
       const sb = b.score || 0
-      if (Math.abs(sb - sa) >= 5) return sb - sa
+      if (sb !== sa) return sb - sa
       const ta = Date.parse(a.createdAt) || 0
       const tb = Date.parse(b.createdAt) || 0
       if (tb !== ta) return tb - ta

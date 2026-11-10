@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ValidationError, normalizeState } from '../dsh/model.js'
+import { ValidationError, mergeState, normalizeState, normalizeStoredState } from '../dsh/model.js'
 
 test('拒绝非对象状态', () => {
   assert.throws(() => normalizeState(null), ValidationError)
@@ -113,4 +113,73 @@ test('X 榜单结构与 linux.do 分开保存，互不覆盖', () => {
   assert.equal(state.x.items.length, 1)
   assert.equal(state.x.items[0].handle, '@a')
   assert.equal(state.x.items[0].likes, 29000, '「2.9万」这类中文缩写应被换算')
+})
+
+test('缺 id 的卡片按标题+分类得到稳定 id，重排后不变', () => {
+  const first = normalizeState({ cards: [{ title: 'A', category: 'X' }, { title: 'B', category: 'X' }] })
+  const reordered = normalizeState({ cards: [{ title: 'B', category: 'X' }, { title: 'A', category: 'X' }] })
+  const byTitle = (state) => Object.fromEntries(state.cards.map((card) => [card.title, card.id]))
+  assert.deepEqual(byTitle(first), byTitle(reordered), '换一下顺序不该改 id')
+  assert.match(first.cards[0].id, /^card-[a-z0-9]+$/)
+})
+
+test('同标题同分类的两张卡片：自动 id 撞车时加后缀，不整体报错', () => {
+  const state = normalizeState({ cards: [{ title: 'A' }, { title: 'A' }] })
+  assert.equal(state.cards.length, 2)
+  assert.notEqual(state.cards[0].id, state.cards[1].id)
+  assert.match(state.cards[1].id, /-2$/)
+})
+
+test('mergeState：卡片归用户，榜单只接受更新的来件', () => {
+  const current = {
+    version: 1,
+    cards: [{ id: 'old', title: '旧卡片' }],
+    topics: [],
+    radar: { updatedAt: '2026-11-10T08:00:00.000Z', date: '2026-11-10', keywords: [], items: [{ id: 'r1', title: '新抓的' }] },
+    x: { updatedAt: '2026-11-10T08:00:00.000Z', date: '2026-11-10', keywords: [], items: [] }
+  }
+  const staleClientPost = {
+    cards: [{ id: 'mine', title: '我的卡片' }],
+    topics: [],
+    radar: { updatedAt: '', date: '', keywords: [], items: [] },
+    x: { updatedAt: '2026-11-10T08:00:00.000Z', date: '2026-11-10', keywords: [], items: [] }
+  }
+  const merged = mergeState(current, staleClientPost)
+  assert.deepEqual(merged.cards.map((card) => card.id), ['mine'], '卡片采用来件')
+  assert.equal(merged.radar.items.length, 1, '旧快照的榜单被挡住')
+  assert.equal(merged.x.items.length, 0)
+
+  const newer = mergeState(current, {
+    ...staleClientPost,
+    radar: { updatedAt: '2026-11-10T09:00:00.000Z', date: '2026-11-10', keywords: [], items: [{ id: 'r2', title: '更新的一轮' }] }
+  })
+  assert.equal(newer.radar.items[0].id, 'r2', '更新时间的榜单采用来件')
+})
+
+test('mergeState：来件没有榜单字段时保留磁盘上的', () => {
+  const current = { cards: [], radar: { updatedAt: '2026-11-10T08:00:00.000Z', items: [{ id: 'r1' }] } }
+  const merged = mergeState(current, { cards: [] })
+  assert.deepEqual(merged.radar.items.map((item) => item.id), ['r1'])
+})
+
+test('榜单条目 id 撞车时只留第一条，避免列表 key 重复', () => {
+  const state = normalizeState({
+    radar: {
+      items: [
+        { id: 'dup', title: 'A', url: 'https://example.com/1' },
+        { id: 'dup', title: 'B', url: 'https://example.com/2' }
+      ]
+    }
+  })
+  assert.equal(state.radar.items.length, 1)
+  assert.equal(state.radar.items[0].title, 'A')
+})
+
+test('normalizeStoredState：坏卡片被跳过并报告数量', () => {
+  const { state, dropped } = normalizeStoredState({
+    version: 1,
+    cards: [{ id: 'ok', title: '好卡片' }, { id: 'bad' }, { id: 'ok', title: '重复 id' }]
+  })
+  assert.equal(state.cards.length, 1)
+  assert.equal(dropped, 2)
 })

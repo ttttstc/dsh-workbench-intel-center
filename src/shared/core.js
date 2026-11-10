@@ -105,6 +105,8 @@ export function buildReviewPrompt({ topics, cards, dataFile, today }) {
     '4. 优先收录高实用性、可操作的内容，并写清避坑点（绑卡、休眠、冷启动、限速、超额计费）。',
     '5. 核实时间写进 verifiedAt（YYYY-MM-DD）；已确认的 status 为 confirmed，未证实为 pending。',
     '',
+    ...WRITE_RULES,
+    '',
     '## 写回位置（固定路径，直接编辑这个文件）',
     dataFile ? `\`${dataFile}\`` : '（读取工作台数据目录后填写）',
     '',
@@ -144,70 +146,6 @@ export function buildReviewPrompt({ topics, cards, dataFile, today }) {
 }
 
 /**
- * 生成「抓 linux.do 羊毛榜」的指令：写清关键词、当天日期、排序口径与回写位置。
- * 这份提示词是给会话里的 AI 用的——它有自己的浏览器，登录状态由用户在那台浏览器里维护。
- */
-export function buildLinuxdoPrompt({ date, keywords = ['羊毛', '薅'], dataFile, existing = [] }) {
-  const day = date || todayISO()
-  const kws = (keywords && keywords.length ? keywords : ['羊毛', '薅']).map((k) => `「${k}」`).join('、')
-  const prev = (existing || []).length
-    ? `上一次抓到 ${existing.length} 条（最近更新：${existing[0]?.createdAt || '未知'}），本次请覆盖成今天的新榜。`
-    : '目前还没有抓取记录。'
-  return [
-    '请帮我抓取 linux.do 今天的「羊毛」热帖榜，并把结果写回工作台数据文件。',
-    '',
-    '## 目标',
-    `- 站点：https://linux.do`,
-    `- 关键词：${kws}`,
-    `- 范围：今天（${day}）发布或有新回复的帖子，按点赞数（likes）从高到低取前 20 条`,
-    prev,
-    '',
-    '## 步骤',
-    '1. 打开浏览器访问 linux.do。如果显示未登录，请在浏览器窗口里登录（我在这边完成登录，你再继续）。',
-    '2. 用站内搜索，搜索词分别试：`羊毛 order:likes after:' + day + '`、`薅 order:likes after:' + day + '`；',
-    '   若搜索接口要求登录，就用搜索结果页正常浏览，按点赞排序。',
-    '3. 合并两组结果，按帖子 id 去重，按点赞数降序保留前 20 条。',
-    '4. 每条记录：标题、链接、作者、分类、点赞数、回复数、浏览量、发布时间、一句摘要（不超过 60 字）。',
-    '5. 抓不到点赞/浏览数据时留 0，不要编造数字。',
-    '',
-    '## 写回位置',
-    dataFile ? '`' + dataFile + '`' : '（读取工作台数据目录后填写）',
-    '',
-    '## 文件结构（只改 linuxdo 字段，cards/topics 原样保留）',
-    '{',
-    '  "version": 1,',
-    '  "cards": [ ... 保持不变 ... ],',
-    '  "topics": [ ... 保持不变 ... ],',
-    '  "linuxdo": {',
-    '    "updatedAt": "抓取完成时间（ISO 8601）",',
-    '    "date": "' + day + '",',
-    '    "keywords": ' + JSON.stringify(keywords && keywords.length ? keywords : ['羊毛', '薅']) + ',',
-    '    "items": [',
-    '      {',
-    '        "id": "帖子 id",',
-    '        "rank": 1,',
-    '        "title": "标题",',
-    '        "url": "https://linux.do/t/...",',
-    '        "author": "作者",',
-    '        "category": "分类",',
-    '        "likes": 0,',
-    '        "replies": 0,',
-    '        "views": 0,',
-    '        "createdAt": "2026-01-01T00:00:00Z",',
-    '        "excerpt": "一句话摘要"',
-    '      }',
-    '    ]',
-    '  },',
-    '  "lastReviewedAt": "...",',
-    '  "updatedAt": "写入时间（ISO 8601）"',
-    '}',
-    '',
-    '## 完成后',
-    '写回文件后，一句话告诉我：抓到几条、最高点赞的是哪条、有没有因为未登录或限流漏掉的。'
-  ].join('\n')
-}
-
-/**
  * 生成「搜 X 上羊毛热帖」的指令。抓取必须走 web-access skill（用户 Chrome 的真实登录态 + CDP）。
  */
 export function buildXPrompt({ date, keywords = ['羊毛', '薅'], dataFile, existing = [] }) {
@@ -222,7 +160,7 @@ export function buildXPrompt({ date, keywords = ['羊毛', '薅'], dataFile, exi
     '## 目标',
     '- 站点：https://x.com',
     '- 关键词：' + kws,
-    '- 排序：按点赞数（likes）从高到低，取前 50 条',
+    '- 排序：按点赞数（likes）从高到低，取前 ' + X_TOP_LIMIT + ' 条',
     '- 时间范围：优先今天（' + day + '），不足 50 条可放宽到最近 7 天',
     prev,
     '',
@@ -230,8 +168,10 @@ export function buildXPrompt({ date, keywords = ['羊毛', '薅'], dataFile, exi
     '1. 加载 web-access skill，按其指引用 CDP 操作用户 Chrome（天然带登录态），自建后台 tab，结束后关闭。',
     '2. 搜索页用 https://x.com/search?q=<关键词>&f=top ；关键词可补充「薅羊毛」「羊毛 免费」提高召回。',
     '3. 抽取每条帖子的：正文（超长截断）、作者名、@handle、点赞、转发、回复、发布时间、帖子链接。',
-    '4. 按帖子 id 去重，按点赞降序保留前 50，过滤纯广告与无关内容。',
+    '4. 按帖子 id 去重，按点赞降序保留前 ' + X_TOP_LIMIT + '，过滤纯广告与无关内容。',
     '5. 计数可能是「1.2万」这类中文缩写，统一换算成整数；抓不到的字段留 0，不要编造。',
+    '',
+    ...WRITE_RULES,
     '',
     '## 写回位置',
     dataFile ? '`' + dataFile + '`' : '（读取工作台数据目录后填写）',
@@ -279,7 +219,47 @@ export const RADAR_CATEGORIES = [
   { id: 'general', name: '一般' }
 ]
 
+/** X 榜单保留条数：抓取、合并、状态接口与界面文案共用这一个数字。 */
+export const X_TOP_LIMIT = 200
+
+/**
+ * 客户端与服务端之间的协议版本。
+ *
+ * 客户端产物与插件服务端是两条加载路径：换版本后服务端要等 Harness 重启才用上新代码，
+ * 而客户端 bundle 打开即生效。没有这个握手，界面只会表现为「刷新没反应」。
+ */
+export const API_VERSION = 2
+
+/**
+ * 写回规则：把「谁能改哪些字段」写给 Agent 看。
+ * 界面每次保存都会整份写回，抓取任务也在写同一个文件；Agent 改动前必须知道边界。
+ */
+const WRITE_RULES = [
+  '## 写回规则（重要）',
+  '- 只改 cards 与 topics（以及 lastReviewedAt）；不要动 linuxdo / x / radar——这三份榜单由工作台自己抓取，覆盖会丢数据。',
+  '- 卡片没有 id 时，工作台会按「标题 + 分类」生成稳定 id；有 id 的卡片保持原 id 不变。',
+  '- 用户写在卡片里的 note 与 flag 是用户数据：更新卡片时原样保留，不要清空。',
+  '- 如果能发 HTTP 请求，`POST /api/intel-center/state` 会先校验再合并（榜单按 updatedAt 取新），比手改文件更安全；改文件时要自己保证 JSON 完整。'
+]
+
 export const RADAR_CATEGORY_LABEL = Object.fromEntries(RADAR_CATEGORIES.map((c) => [c.id, c.name]))
+
+/**
+ * 雷达排序。
+ * - score：按羊毛分从高到低（同分再看时间），默认口径——先看最值得薅的
+ * - time：纯时间倒序，看「今天有什么新的」
+ */
+export function sortRadarItems(items, order = 'score') {
+  const list = [...(items || [])]
+  if (order === 'time') {
+    return list.sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0))
+  }
+  return list.sort((a, b) => {
+    const byScore = (b.score || 0) - (a.score || 0)
+    if (byScore !== 0) return byScore
+    return (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
+  })
+}
 
 /** 按来源、分类、关键词过滤雷达条目。 */
 export function filterRadar(items, { source = '', category = '', q = '' } = {}) {

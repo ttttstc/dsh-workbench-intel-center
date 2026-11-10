@@ -142,3 +142,15 @@ test('核实结论：真实免费 / 有条件免费 / 只是优惠 / 待判断',
   assert.equal(verifyFree('全场 8 折优惠券').verdict, 'discount')
   assert.equal(verifyFree('今天写了一段代码').verdict, 'unknown')
 })
+
+test('雷达合并结果按羊毛分从高到低（排序必须是全序，不随输入顺序抖动）', async () => {
+  const { buildRadar } = await import("../dsh/sources.js")
+  const now = Date.parse("2026-11-10T12:00:00Z")
+  const make = (title, createdAt) => ({ title, url: "https://example.com/" + encodeURIComponent(title), excerpt: "免费领取 10 元", createdAt, source: "v2ex" })
+  const items = [make("A 三天前", "2026-11-07T12:00:00Z"), make("B 刚刚", "2026-11-10T11:00:00Z"), make("C 一天前", "2026-11-09T12:00:00Z")]
+  const forward = buildRadar(items, { now })
+  const backward = buildRadar([...items].reverse(), { now })
+  const scores = forward.map((item) => item.score)
+  assert.deepEqual(scores, [...scores].sort((a, b) => b - a), "分数必须单调不增")
+  assert.deepEqual(forward.map((i) => i.title), backward.map((i) => i.title), "换输入顺序不该改结果")
+})

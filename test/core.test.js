@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildLinuxdoPrompt, buildReviewPrompt, buildXPrompt, filterRadar, relativeTime, filterCards, formatWhen, highlightCards, todayISO } from '../src/shared/core.js'
+import { sortRadarItems, buildReviewPrompt, buildXPrompt, filterRadar, relativeTime, filterCards, formatWhen, highlightCards, todayISO } from '../src/shared/core.js'
 
 const cards = [
   {
@@ -89,22 +89,6 @@ test('todayISO 输出 YYYY-MM-DD', () => {
   assert.match(todayISO(new Date(2026, 10, 9)), /^2026-11-09$/)
 })
 
-test('linux.do 抓取指令写清关键词、日期、回写路径与结构', () => {
-  const text = buildLinuxdoPrompt({
-    date: '2026-11-09',
-    keywords: ['羊毛', '薅'],
-    dataFile: 'C:/Users/x/AppData/Roaming/dsh-desktop/harness/intel-center/state.json',
-    existing: [{ createdAt: '2026-11-08T10:00:00Z' }]
-  })
-  assert.match(text, /「羊毛」、「薅」/)
-  assert.match(text, /2026-11-09/)
-  assert.match(text, /intel-center[\\/]state\.json/)
-  assert.match(text, /按点赞数/)
-  assert.match(text, /"linuxdo"/)
-  assert.match(text, /不要编造数字/)
-  assert.match(text, /上一次抓到 1 条/)
-})
-
 test('X 抓取指令点名 web-access skill、点赞排序与回写结构', () => {
   const text = buildXPrompt({
     date: '2026-11-09',
@@ -140,4 +124,15 @@ test('相对时间：分钟 / 小时 / 天', () => {
   assert.equal(relativeTime('2026-11-10T09:00:00Z', now), '3 小时前')
   assert.equal(relativeTime('2026-11-08T12:00:00Z', now), '2 天前')
   assert.equal(relativeTime('bad', now), '')
+})
+
+test('雷达排序：默认按羊毛分从高到低，同分再看时间', () => {
+  const items = [
+    { score: 40, createdAt: '2026-11-10T09:00:00Z', title: '低分新帖' },
+    { score: 90, createdAt: '2026-11-09T09:00:00Z', title: '高分旧帖' },
+    { score: 90, createdAt: '2026-11-10T08:00:00Z', title: '高分新帖' },
+    { createdAt: '2026-11-10T10:00:00Z', title: '没有分数' }
+  ]
+  assert.deepEqual(sortRadarItems(items).map((item) => item.title), ['高分新帖', '高分旧帖', '低分新帖', '没有分数'])
+  assert.deepEqual(sortRadarItems(items, 'time').map((item) => item.title), ['没有分数', '低分新帖', '高分新帖', '高分旧帖'])
 })

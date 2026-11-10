@@ -6,11 +6,14 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { ValidationError, emptyState, normalizeState } from './model.js'
+import { ValidationError, emptyState, normalizeState, normalizeStoredState } from './model.js'
 import { seedState } from '../src/shared/seed.js'
 
 export const MAX_STATE_BYTES = 4 * 1024 * 1024
 const FILE = 'state.json'
+
+/** 同一毫秒内两次写入也要拿到不同的临时文件名，否则会互相截断。 */
+let writeSeq = 0
 
 function nowISO() {
   return new Date().toISOString()
@@ -31,7 +34,7 @@ export function createIntelStore(root) {
     if (Buffer.byteLength(body, 'utf8') > MAX_STATE_BYTES) {
       throw new ValidationError('数据超过 4MB 上限，请先删掉部分卡片。', 413)
     }
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+    const tmp = `${file}.${process.pid}.${Date.now()}.${++writeSeq}.tmp`
     await fs.writeFile(tmp, body, 'utf8')
     await fs.rename(tmp, file)
     return Buffer.byteLength(body, 'utf8')
@@ -62,7 +65,16 @@ export function createIntelStore(root) {
         throw new ValidationError(`无法读取数据文件：${error.message}`, 500)
       }
       try {
-        return normalizeState(JSON.parse(raw))
+        const parsed = JSON.parse(raw)
+        if (Number.isFinite(Number(parsed?.version)) && Number(parsed.version) !== 1) {
+          console.warn(`[intel-center] 数据版本 ${parsed.version} 与当前实现（1）不一致，按 v1 读取。`)
+        }
+        // 坏卡片（缺标题、id 重复）只丢那几张，不让整份数据读不出来。
+        const { state, dropped } = normalizeStoredState(parsed)
+        if (dropped > 0) {
+          console.warn(`[intel-center] state.json 里有 ${dropped} 张卡片无法解析，已跳过；下次保存时不会写回它们。`)
+        }
+        return state
       } catch (error) {
         if (error instanceof ValidationError) throw error
         throw new ValidationError(`数据文件不是合法 JSON：${error.message}`, 500)
