@@ -102,10 +102,19 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center', de
 
   async function runRadar(reason) {
     const startedAt = now().toISOString()
-    // 先抓能直连的源，再借浏览器补 linux.do / NodeSeek；浏览器失败不影响直连结果。
+    // 先跑六个直连源；只有 LINUX DO / NodeSeek 被 Cloudflare 挡时，才动用浏览器通道，
+    // 而且只用它去抓真正失败的那个源（NodeSeek 有官方 RSS，直连成功时不该再让浏览器抓一遍）。
     const server = await fetchServerSources()
-    const browser = await fetchBrowserFeeds({ log: () => {} })
-      .catch((error) => ({ items: [], errors: [String(error?.message || error)] }))
+    const errorText = (server.errors || []).join(' ')
+    const includeLinuxdo = /LINUX DO/.test(errorText)
+    // NodeSeek：直连失败必须走浏览器；直连成功时，如果浏览器已经因为 linux.do 开着，
+    // 就顺带抓一次「推广」版块——官方 RSS 是全站的，过滤后召回声比版块页低，而这一步不额外开页面。
+    const includeNodeSeek = /NodeSeek/.test(errorText) || includeLinuxdo
+    const needsBrowser = includeLinuxdo || includeNodeSeek
+    const browser = needsBrowser
+      ? await fetchBrowserFeeds({ log: () => {}, includeLinuxdo, includeNodeSeek })
+        .catch((error) => ({ items: [], errors: [String(error?.message || error)] }))
+      : { items: [], errors: [] }
     const all = [...(server.items || []), ...(browser.items || [])]
     const errors = [...(server.errors || []), ...(browser.errors || [])]
     const merged = await mergeIntoRadar(all, startedAt)
@@ -120,6 +129,7 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center', de
       fresh: all.length,
       serverCount: (server.items || []).length,
       browserCount: (browser.items || []).length,
+      browserSkipped: !needsBrowser,
       bySource,
       errors,
       reason

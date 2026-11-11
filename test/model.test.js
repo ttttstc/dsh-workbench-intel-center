@@ -183,3 +183,10 @@ test('normalizeStoredState：坏卡片被跳过并报告数量', () => {
   assert.equal(state.cards.length, 1)
   assert.equal(dropped, 2)
 })
+
+test('expiresAt：合法 ISO 保留，垃圾值丢弃', () => {
+  const ok = normalizeState({ radar: { items: [{ id: "a", title: "游戏", url: "https://e.com/1", expiresAt: "2026-11-18T00:00:00.000Z" }] } })
+  assert.equal(ok.radar.items[0].expiresAt, "2026-11-18T00:00:00.000Z")
+  const bad = normalizeState({ radar: { items: [{ id: "b", title: "游戏", url: "https://e.com/2", expiresAt: "not-a-date" }] } })
+  assert.equal(bad.radar.items[0].expiresAt, "")
+})

@@ -160,6 +160,8 @@ const CSS = `
 .intel-verify[data-verdict='conditional']{color:#B5460F;border-color:#B5460F}
 .intel-verify[data-verdict='discount']{color:#1F5AA8;border-color:#1F5AA8}
 .intel-verify[data-verdict='unknown']{color:#777;opacity:.7}
+.intel-deadline{font-size:11px;font-weight:700;padding:0 6px;border:1px solid currentColor;white-space:nowrap}
+.intel-deadline[data-urgent='1']{color:#C0261A;background:rgba(192,38,26,.08)}
 .intel-post-title{margin:0;font-size:15px;line-height:1.45;font-weight:700;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .intel-post-desc{margin:0;font-size:12px;line-height:1.55;color:var(--il-mute);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .intel-post-by{font-size:12.5px;color:var(--il-mute)}
@@ -251,6 +253,15 @@ function localDayOf(iso) {
   const date = new Date(time)
   const pad = (n) => String(n).padStart(2, '0')
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+/** 有截止时间的条目（Epic 限免）：显示还剩几天，2 天内标红。 */
+function deadlineChip(iso) {
+  const time = Date.parse(iso)
+  if (!Number.isFinite(time)) return null
+  const days = Math.ceil((time - Date.now()) / 86400000)
+  return h('span', { className: 'intel-deadline', 'data-urgent': days <= 2 ? '1' : '0' },
+    days <= 0 ? '今天截止' : `${days} 天后截止`)
 }
 
 function ScorePill({ score }) {
@@ -648,7 +659,15 @@ function Panel(props) {
   const xShown = [...xItems].sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0))
   const radarFeed = state?.radar || { updatedAt: '', date: '', items: [] }
   const radarItems = radarFeed.items || []
-  const RADAR_SOURCE_LABEL = { linuxdo: 'LINUX DO', v2ex: 'V2EX', nodeseek: 'NodeSeek', appinn: '小众软件' }
+  const RADAR_SOURCE_LABEL = {
+    linuxdo: 'LINUX DO',
+    nodeseek: 'NodeSeek',
+    v2ex: 'V2EX',
+    appinn: '小众软件',
+    ghxi: '果核剥壳',
+    iplaysoft: '异次元',
+    epic: 'Epic'
+  }
 
   // 时间表只有一处真值（服务端 RUN_HOURS），界面把它渲染出来，不另写一份文案。
   const runHoursText = (radarStatus?.hours || [8, 12, 16, 20])
@@ -1195,6 +1214,7 @@ function Panel(props) {
           RADAR_CATEGORY_LABEL[item.category] || '羊毛'),
         item.score ? h('span', { className: 'intel-woolscore', 'data-tier': item.score >= 70 ? 'hot' : (item.score >= 50 ? 'warm' : 'cool') }, '羊毛分 ' + item.score) : null,
         h('span', { className: 'intel-verify', 'data-verdict': item.verdict || 'unknown' }, ({ free: '真实免费', conditional: '有条件免费', discount: '只是优惠', unknown: '待判断' })[item.verdict] || '待判断'),
+        item.expiresAt ? deadlineChip(item.expiresAt) : null,
         h('span', { className: 'intel-post-time' }, item.timeExact === false ? '最近活跃' : relativeTime(item.createdAt))),
       h('h3', { className: 'intel-post-title' }, item.title),
       item.excerpt ? h('p', { className: 'intel-post-desc' }, item.excerpt) : null,

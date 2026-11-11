@@ -54,14 +54,18 @@ async function waitJob(job) {
   return job.wait()
 }
 
-test('POST /radar/refresh 启动后台任务：立即 202，状态里能看到结果', async () => {
+test('POST /radar/refresh 启动后台任务：立即 202，直连全成功时不惊动浏览器', async () => {
+  let browserCalls = 0
   const { call, api } = await mount({
     deps: {
       collectServerSources: async () => ({
         items: [radarItem('免费领取 10 GB 云空间', 'https://example.com/a')],
         errors: []
       }),
-      crawlBrowserFeeds: async () => ({ items: [], errors: ['NodeSeek：Cloudflare 拦截'] })
+      crawlBrowserFeeds: async () => {
+        browserCalls += 1
+        return { items: [], errors: [] }
+      }
     }
   })
 
@@ -79,13 +83,42 @@ test('POST /radar/refresh 启动后台任务：立即 202，状态里能看到�
   assert.equal(status.status, 200)
   assert.equal(status.body.job.status, 'succeeded')
   assert.equal(status.body.job.result.count, 1)
-  assert.deepEqual(status.body.job.result.errors, ['NodeSeek：Cloudflare 拦截'], '单个来源失败不该让整轮失败')
+  assert.equal(status.body.job.result.browserSkipped, true, '直连都成功时不该开浏览器')
+  assert.equal(browserCalls, 0, '浏览器通道一次都不该被调用')
+  assert.deepEqual(status.body.job.result.errors, [])
   assert.equal(status.body.running, false)
   assert.deepEqual(status.body.hours, RUN_HOURS, '状态接口的小时表必须等于调度器真值')
 
   const state = await call('/api/intel-center/state')
   assert.equal(state.body.state.radar.items.length, 1)
   assert.equal(state.body.state.radar.items[0].title, '免费领取 10 GB 云空间')
+})
+
+test('直连被 Cloudflare 挡住时才启用浏览器通道，且失败原因保留在结果里', async () => {
+  const { call, api } = await mount({
+    deps: {
+      collectServerSources: async () => ({
+        items: [radarItem('免费额度的直连条目', 'https://example.com/direct')],
+        errors: ['NodeSeek 最新：返回 403']
+      }),
+      crawlBrowserFeeds: async () => ({
+        items: [radarItem('浏览器补抓的限免条目', 'https://example.com/browser')],
+        errors: ['LINUX DO 福利羊毛：浏览器也超时']
+      })
+    }
+  })
+  await call('/api/intel-center/radar/refresh', { method: 'POST', body: '{}' })
+  await waitJob(api.radarJob)
+
+  const status = await call('/api/intel-center/radar/status')
+  assert.equal(status.body.job.result.browserSkipped, false)
+  assert.equal(status.body.job.result.browserCount, 1)
+  assert.equal(status.body.job.result.errors.length, 2, '直连与浏览器的失败都记录')
+  const state = await call('/api/intel-center/state')
+  assert.deepEqual(
+    state.body.state.radar.items.map((item) => item.title).sort(),
+    ['免费额度的直连条目', '浏览器补抓的限免条目']
+  )
 })
 
 test('抓取失败时不吞掉原因：job 进 failed，detail 可读', async () => {

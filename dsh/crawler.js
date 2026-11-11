@@ -155,12 +155,21 @@ export async function crawlX({
 /**
  * 两个有登录墙 / Cloudflare 的站：借浏览器页面内的 fetch 取数据，再用 Node 侧解析。
  * linux.do 用 /latest.rss（匿名可取 30 条）；NodeSeek 用首页 HTML 里的 /post-<id> 链接。
+ *
+ * includeLinuxdo / includeNodeSeek：直连成功的源不该再被浏览器抓一遍（NodeSeek 现在有官方 RSS，
+ * 通常直连就能拿到），所以由调用方按「哪些源直连失败」决定要跑哪几段。
  */
-export async function crawlBrowserFeeds({ cdp = createCdpClient(), pageWaitMs = 6000, log = () => {} } = {}) {
+export async function crawlBrowserFeeds({
+  cdp = createCdpClient(),
+  pageWaitMs = 6000,
+  includeLinuxdo = true,
+  includeNodeSeek = true,
+  log = () => {}
+} = {}) {
   const items = []
   const errors = []
 
-  try {
+  if (includeLinuxdo) try {
     const tab = await cdp.newTab('https://linux.do/c/welfare/36')
     try {
       await sleep(pageWaitMs)
@@ -183,7 +192,7 @@ export async function crawlBrowserFeeds({ cdp = createCdpClient(), pageWaitMs = 
     errors.push('linux.do：' + (error?.message || error))
   }
 
-  try {
+  if (includeNodeSeek) try {
     const tab = await cdp.newTab('https://www.nodeseek.com/categories/promotion')
     try {
       await sleep(pageWaitMs)

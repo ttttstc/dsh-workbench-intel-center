@@ -173,6 +173,8 @@ function normalizeFeedItem(raw, index, prefix) {
     reposts: count(raw.reposts),
     views: count(raw.views),
     createdAt: text(raw.createdAt, 40),
+    // 带截止时间的来源（Epic 限免）会写这一项；过了截止时间抓取合并时就下版。
+    expiresAt: Number.isFinite(Date.parse(text(raw.expiresAt, 40))) ? text(raw.expiresAt, 40) : '',
     timeExact: raw.timeExact === false ? false : true,
     score: Number.isFinite(Number(raw.score)) ? Math.max(0, Math.min(100, Math.round(Number(raw.score)))) : 0,
     verdict: text(raw.verdict, 20) || (raw.verified === true ? 'free' : 'unknown'),
