@@ -1,6 +1,6 @@
 {
   "name": "dsh-workbench-intel-center",
-  "version": "1.24.0",
+  "version": "1.25.0",
   "private": true,
   "description": "羊毛大王：按关注主题持续收集、核实并结构化呈现最新信息，卡片可直接备注、标记状态并一键复核。",
   "type": "module",

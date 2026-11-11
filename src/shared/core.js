@@ -211,14 +211,40 @@ export function buildXPrompt({ date, keywords = ['羊毛', '薅'], dataFile, exi
   ].join('\n')
 }
 
-/** 羊毛雷达的分类（与服务端 sources.js 的 id 对齐）。 */
+/**
+ * 羊毛雷达的分类 = 价格维度（限免 / 免费 / 低价 / 一般）。
+ * 「游戏」不是价格维度，它是内容类型、且有独立截止时间，所以放在单独的「游戏限免」页，
+ * 不混进这一排筛选里。
+ */
 export const RADAR_CATEGORIES = [
   { id: 'limited', name: '限免' },
   { id: 'free', name: '免费' },
-  { id: 'game', name: '游戏' },
   { id: 'cheap', name: '低价' },
   { id: 'general', name: '一般' }
 ]
+
+/**
+ * 把雷达条目按「价格类 / 游戏类」拆开。
+ * 游戏按**截止时间最近的在最前**排（能领到比什么都重要），同截止时间再按新近。
+ */
+export function splitRadarItems(items) {
+  const games = []
+  const offers = []
+  for (const item of items || []) {
+    if (item?.category === 'game') games.push(item)
+    else offers.push(item)
+  }
+  const deadline = (item) => {
+    const time = Date.parse(item?.expiresAt)
+    return Number.isFinite(time) ? time : Number.POSITIVE_INFINITY
+  }
+  games.sort((a, b) => {
+    const byDeadline = deadline(a) - deadline(b)
+    if (byDeadline !== 0) return byDeadline
+    return (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
+  })
+  return { games, offers }
+}
 
 /** X 榜单保留条数：抓取、合并、状态接口与界面文案共用这一个数字。 */
 export const X_TOP_LIMIT = 200
@@ -229,7 +255,7 @@ export const X_TOP_LIMIT = 200
  * 客户端产物与插件服务端是两条加载路径：换版本后服务端要等 Harness 重启才用上新代码，
  * 而客户端 bundle 打开即生效。没有这个握手，界面只会表现为「刷新没反应」。
  */
-export const API_VERSION = 3
+export const API_VERSION = 4
 
 /**
  * 写回规则：把「谁能改哪些字段」写给 Agent 看。

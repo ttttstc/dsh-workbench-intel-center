@@ -39,6 +39,7 @@ const CORE_EXPORTS = [
   'buildXPrompt',
   'RADAR_CATEGORIES',
   'RADAR_CATEGORY_LABEL',
+  'splitRadarItems',
   'X_TOP_LIMIT',
   'API_VERSION',
   'sortRadarItems',

@@ -202,3 +202,28 @@ test('来源清单：七个源，NodeSeek 已改为可直连', async () => {
   assert.equal(SOURCES.find((source) => source.id === "nodeseek").kind, "both")
   assert.equal(SOURCES.find((source) => source.id === "ghxi").kind, "direct")
 })
+
+test('Epic：单次连接失败会重试，最终成功', async () => {
+  const { fetchEpic } = await import("../dsh/sources.js")
+  let calls = 0
+  const fetchImpl = async () => {
+    calls += 1
+    if (calls === 1) throw new Error("connect timeout")
+    return new Response(JSON.stringify({ data: { Catalog: { searchStore: { elements: [
+      { title: "免费游戏", productSlug: "x", promotions: { promotionalOffers: [{ promotionalOffers: [{ startDate: "2026-11-11T00:00:00Z", endDate: "2026-11-20T00:00:00Z", discountSetting: { discountPercentage: 0 } }] }] } }
+    ] } } } }), { status: 200 })
+  }
+  const result = await fetchEpic({ fetchImpl, now: Date.parse("2026-11-11T02:00:00Z"), attempts: 3, waitMs: 1 })
+  assert.equal(calls, 2, "第一次失败后应重试")
+  assert.equal(result.items.length, 1)
+  assert.deepEqual(result.errors, [])
+})
+
+test('Epic：所有尝试都失败时报出最近两次的原因', async () => {
+  const { fetchEpic } = await import("../dsh/sources.js")
+  const fetchImpl = async () => { throw new Error("connect timeout") }
+  const result = await fetchEpic({ fetchImpl, attempts: 1, waitMs: 1 })
+  assert.equal(result.items.length, 0)
+  assert.match(result.errors[0], /Epic 免费游戏/)
+  assert.match(result.errors[0], /connect timeout/)
+})
