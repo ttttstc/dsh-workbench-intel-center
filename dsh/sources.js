@@ -1,22 +1,29 @@
 /**
- * 羊毛雷达的数据源（四个，全部真实抓取）。
+ * 羊毛雷达的数据源（七个，全部真实抓取）。
  *
  * 直连：
  * - V2EX · 优惠信息  https://www.v2ex.com/feed/deals.xml （官方 Atom，不用会 403 的 JSON API）
  * - 小众软件        https://www.appinn.com/feed/ （官方 RSS）
- * - LINUX DO · 福利羊毛 https://linux.do/c/welfare/36.rss （category 36；可能被 Cloudflare 拦）
- * 浏览器：
- * - NodeSeek · 推广/情报 https://www.nodeseek.com/categories/promotion （Cloudflare，必须借浏览器）
- * - LINUX DO 直连失败时，用浏览器页面内 fetch 补抓
+ * - 果核剥壳        https://www.ghxi.com/feed （官方 RSS）
+ * - 异次元软件世界    https://www.iplaysoft.com/feed （官方 RSS，会 301）
+ * - NodeSeek · 最新  https://rss.nodeseek.com/ （官方 RSS，通常可直连；被拦时退回浏览器）
+ * - LINUX DO · 福利羊毛 https://linux.do/c/welfare/36.rss （category 36；常被 Cloudflare 拦，退回浏览器）
+ * - Epic 免费游戏    免费促销 JSON 接口（带起止时间，到期自动下版）
+ *
+ * 浏览器通道只在直连失败时启用：来源被 Cloudflare 拦时，借用户浏览器页面内的 fetch 补抓
+ * （见 crawler.js）。这一层让四个站点之外的新来源可以纯直连加入，不必都依赖 Chrome。
  *
  * 收录规则集中在 KEYWORDS / CATEGORIES / buildRadar，改词表即可调整口径。
  */
 
 export const SOURCES = [
   { id: 'linuxdo', name: 'LINUX DO 福利羊毛', home: 'https://linux.do/c/welfare/36', kind: 'both' },
+  { id: 'nodeseek', name: 'NodeSeek 最新', home: 'https://www.nodeseek.com/', kind: 'both' },
   { id: 'appinn', name: '小众软件', home: 'https://www.appinn.com/', kind: 'direct' },
-  { id: 'nodeseek', name: 'NodeSeek 推广情报', home: 'https://www.nodeseek.com/categories/promotion', kind: 'browser' },
-  { id: 'v2ex', name: 'V2EX 优惠信息', home: 'https://www.v2ex.com/go/deals', kind: 'direct' }
+  { id: 'ghxi', name: '果核剥壳', home: 'https://www.ghxi.com/', kind: 'direct' },
+  { id: 'iplaysoft', name: '异次元软件世界', home: 'https://www.iplaysoft.com/', kind: 'direct' },
+  { id: 'v2ex', name: 'V2EX 优惠信息', home: 'https://www.v2ex.com/go/deals', kind: 'direct' },
+  { id: 'epic', name: 'Epic 免费游戏', home: 'https://store.epicgames.com/zh-CN/free-games', kind: 'direct' }
 ]
 
 /** 收录关键词：标题或摘要命中任一才进榜。 */
@@ -27,10 +34,14 @@ export const KEYWORDS = [
   '优惠券', '折扣码', '返现', '补贴', '特价', '送', '领'
 ]
 
-/** 三个标签，顺序即判定优先级（先限免，再免费，最后低价）。 */
+/**
+ * 分类，顺序即判定优先级（先限免，再免费，然后游戏，最后低价）。
+ * 「游戏」不靠词表判定：Epic 的条目由解析器直接标成 game（中文游戏名里未必有「免费」两个字）。
+ */
 export const CATEGORIES = [
   { id: 'limited', name: '限免', words: ['限免', '限时免费', '限时', '最后一天', '即将结束', '截止'] },
   { id: 'free', name: '免费', words: ['免费', '白嫖', '0 元', '0元', '白给', '赠送', '领取', '试用', '白送', '福利', '抽奖'] },
+  { id: 'game', name: '游戏', words: [] },
   { id: 'cheap', name: '低价', words: ['低价', '优惠', '折扣', '特价', '降价', '券', '补贴', '促销', '立减', '首月', '元/月', '红包', '秒杀', '团购', '返现', '便宜', '省钱'] }
 ]
 
@@ -213,6 +224,101 @@ export async function fetchLinuxdo({ fetchImpl = fetch } = {}) {
   }
 }
 
+/** NodeSeek：官方 RSS（通常可直连，被 Cloudflare 拦时由浏览器通道兜底）。 */
+export async function fetchNodeSeek({ fetchImpl = fetch } = {}) {
+  try {
+    const xml = await getText('https://rss.nodeseek.com/', {
+      fetchImpl,
+      accept: 'application/rss+xml,application/xml,text/xml,*/*'
+    })
+    return { items: parseRss(xml, { source: 'nodeseek' }), errors: [] }
+  } catch (error) {
+    return { items: [], errors: [`NodeSeek 最新：${error?.message || error}`] }
+  }
+}
+
+/** 果核剥壳：官方 RSS。 */
+export async function fetchGhxi({ fetchImpl = fetch } = {}) {
+  try {
+    const xml = await getText('https://www.ghxi.com/feed', {
+      fetchImpl,
+      accept: 'application/rss+xml,application/xml,text/xml,*/*'
+    })
+    return { items: parseRss(xml, { source: 'ghxi' }), errors: [] }
+  } catch (error) {
+    return { items: [], errors: [`果核剥壳：${error?.message || error}`] }
+  }
+}
+
+/** 异次元软件世界：官方 RSS（请求会 301 到 feed.iplaysoft.com）。 */
+export async function fetchIplaysoft({ fetchImpl = fetch } = {}) {
+  try {
+    const xml = await getText('https://www.iplaysoft.com/feed', {
+      fetchImpl,
+      accept: 'application/rss+xml,application/xml,text/xml,*/*'
+    })
+    return { items: parseRss(xml, { source: 'iplaysoft' }), errors: [] }
+  } catch (error) {
+    return { items: [], errors: [`异次元软件世界：${error?.message || error}`] }
+  }
+}
+
+export const EPIC_FREE_URL =
+  'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN'
+
+/**
+ * Epic 免费游戏：从促销 JSON 里挑出「当前正在免费」和「即将开始免费」的商品。
+ *
+ * 与其它来源的关键差别：它自带**起止时间**，到期就该下版，所以条目带 expiresAt；
+ * 游戏名里通常不含「免费」二字，因此由解析器直接标成 game 分类，绕开关键词表。
+ */
+export function parseEpic(json, { now = Date.now() } = {}) {
+  const elements = json?.data?.Catalog?.searchStore?.elements
+  if (!Array.isArray(elements)) throw new Error('Epic 返回结构变了：找不到 data.Catalog.searchStore.elements')
+
+  const items = []
+  for (const element of elements) {
+    const title = String(element?.title || '').trim()
+    if (!title) continue
+    const offers = element?.promotions?.promotionalOffers?.[0]?.promotionalOffers || []
+    for (const offer of offers) {
+      if (Number(offer?.discountSetting?.discountPercentage) !== 0) continue
+      const end = Date.parse(offer?.endDate)
+      if (!Number.isFinite(end) || end <= now) continue
+      const start = Date.parse(offer?.startDate)
+      const slug = element?.productSlug || element?.urlSlug || element?.offerMappings?.[0]?.pageSlug || ''
+      items.push({
+        source: 'epic',
+        title,
+        url: slug ? `https://store.epicgames.com/zh-CN/p/${slug}` : 'https://store.epicgames.com/zh-CN/free-games',
+        excerpt: Number.isFinite(start) && start > now ? '即将开始免费领取' : '当前免费领取，截止前领取永久入库',
+        createdAt: new Date(Number.isFinite(start) && start <= now ? start : now).toISOString(),
+        expiresAt: new Date(end).toISOString(),
+        category: 'game',
+        heat: 0
+      })
+      break
+    }
+  }
+  return items
+}
+
+/** Epic 免费游戏：JSON 接口。没有免费游戏是正常结果，不当失败。 */
+export async function fetchEpic({ fetchImpl = fetch, now = Date.now() } = {}) {
+  try {
+    const body = await getText(EPIC_FREE_URL, { fetchImpl, accept: 'application/json' })
+    let json
+    try {
+      json = JSON.parse(body)
+    } catch {
+      throw new Error('返回的不是合法 JSON')
+    }
+    return { items: parseEpic(json, { now }), errors: [] }
+  } catch (error) {
+    return { items: [], errors: [`Epic 免费游戏：${error?.message || error}`] }
+  }
+}
+
 async function withRetry(task, { retries = 1, waitMs = 800 } = {}) {
   let lastError
   for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -228,20 +334,26 @@ async function withRetry(task, { retries = 1, waitMs = 800 } = {}) {
   return { items: [], errors: [String(lastError?.message || lastError)] }
 }
 
-/** 三个直连来源（NodeSeek 只能走浏览器）。 */
-export async function collectServerSources({ fetchImpl = fetch } = {}) {
-  const [v2, ap, ld] = await Promise.all([
+/** 六个直连来源（LINUX DO 与 NodeSeek 直连失败时，由浏览器通道兜底）。 */
+export async function collectServerSources({ fetchImpl = fetch, now = Date.now() } = {}) {
+  const [v2, ap, gh, ip, ns, ld, epic] = await Promise.all([
     withRetry(() => fetchV2ex({ fetchImpl })),
     withRetry(() => fetchAppinn({ fetchImpl })),
-    withRetry(() => fetchLinuxdo({ fetchImpl }), { retries: 0 })
+    withRetry(() => fetchGhxi({ fetchImpl })),
+    withRetry(() => fetchIplaysoft({ fetchImpl })),
+    withRetry(() => fetchNodeSeek({ fetchImpl })),
+    withRetry(() => fetchLinuxdo({ fetchImpl }), { retries: 0 }),
+    // Epic 没有免费游戏是正常结果，交给 withRetry 会把它当失败重试，所以直接调用。
+    fetchEpic({ fetchImpl, now })
   ])
+  const results = [v2, ap, gh, ip, ns, ld, epic]
   return {
-    items: [...v2.items, ...ap.items, ...ld.items],
-    errors: [...(v2.errors || []), ...(ap.errors || []), ...(ld.errors || [])]
+    items: results.flatMap((result) => result.items || []),
+    errors: results.flatMap((result) => result.errors || [])
   }
 }
 
-const CATEGORY_PRIORITY = { limited: 0, free: 1, cheap: 2, general: 3 }
+const CATEGORY_PRIORITY = { limited: 0, game: 1, free: 2, cheap: 3, general: 4 }
 
 const FREE_SIGNAL = /(免费|白嫖|0\s*元|0元|白给|赠送|免费领取|免单|限免)/
 const COST_SIGNAL = /(需绑卡|要绑卡|需实名|实名认证|需付|付费|首充|首月|押金|满减|需购买|会员价|订阅|邀请码|返利|aff|推广)/i
@@ -279,7 +391,7 @@ export function hasConcreteEvidence(text) {
  */
 export function scoreWool(item, { now = Date.now() } = {}) {
   const text = (item.title || '') + ' ' + (item.excerpt || '')
-  const base = { limited: 62, free: 58, cheap: 40, general: 24 }[item.category] ?? 24
+  const base = { limited: 62, game: 66, free: 58, cheap: 40, general: 24 }[item.category] ?? 24
   let score = base
   if (hasConcreteEvidence(text)) score += 18
   if (/(限时|限免)/.test(text)) score += 6
@@ -290,6 +402,12 @@ export function scoreWool(item, { now = Date.now() } = {}) {
   const age = now - (Date.parse(item.createdAt) || now)
   if (age <= 24 * 3600 * 1000) score += 10
   else if (age <= 3 * 24 * 3600 * 1000) score += 5
+  // 有明确截止时间的（Epic 限免）：越临近优先，过了就下版，所以「还剩几天」本身就是价值。
+  const left = Date.parse(item.expiresAt) - now
+  if (Number.isFinite(left) && left > 0) {
+    if (left <= 2 * 24 * 3600 * 1000) score += 12
+    else if (left <= 5 * 24 * 3600 * 1000) score += 6
+  }
   if (item.source === 'appinn') score += 4
   if (item.source === 'v2ex') score += 3
   score = Math.max(1, Math.min(100, Math.round(score)))
@@ -305,11 +423,16 @@ export function buildRadar(rawItems, { now = Date.now(), days = MAX_AGE_DAYS, li
   const byUrl = new Map()
   for (const raw of rawItems) {
     if (!raw?.url || !raw?.title) continue
+    // 带截止时间的（Epic 限免）：过了截止就下版，不再占位。
+    const expires = Date.parse(raw.expiresAt)
+    if (Number.isFinite(expires) && expires <= now) continue
     if (!withinDays(raw.createdAt, days, now)) continue
     if (isNoise(raw.title) || isNoise(raw.excerpt)) continue
     const text = `${raw.title} ${raw.excerpt}`
-    if (!matchesKeywords(text)) continue
-    const rawCat = classify(text)
+    // 游戏是解析器直接判定的分类：游戏名里通常没有「免费」，不该被关键词表挡掉。
+    const declaredGame = raw.category === 'game'
+    if (!declaredGame && !matchesKeywords(text)) continue
+    const rawCat = declaredGame ? 'game' : classify(text)
     // 命中关键词但归不到三类的（比如只说「福利」「抽奖」），保留为「一般」，
     // 否则版块里大量有效帖子会被关键词表挡掉。
     const category = rawCat === 'other' ? 'general' : rawCat

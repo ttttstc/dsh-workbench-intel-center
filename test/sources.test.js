@@ -154,3 +154,51 @@ test('雷达合并结果按羊毛分从高到低（排序必须是全序，不�
   assert.deepEqual(scores, [...scores].sort((a, b) => b - a), "分数必须单调不增")
   assert.deepEqual(forward.map((i) => i.title), backward.map((i) => i.title), "换输入顺序不该改结果")
 })
+
+test('Epic：只取当前免费与即将开始，已结束/打折的不算', async () => {
+  const { parseEpic } = await import("../dsh/sources.js")
+  const now = Date.parse("2026-11-11T02:00:00Z")
+  const sample = {
+    data: { Catalog: { searchStore: { elements: [
+      { title: "当前免费", productSlug: "a", promotions: { promotionalOffers: [{ promotionalOffers: [{ startDate: "2026-11-05T00:00:00Z", endDate: "2026-11-18T00:00:00Z", discountSetting: { discountPercentage: 0 } }] }] } },
+      { title: "已结束", productSlug: "b", promotions: { promotionalOffers: [{ promotionalOffers: [{ startDate: "2026-10-01T00:00:00Z", endDate: "2026-10-08T00:00:00Z", discountSetting: { discountPercentage: 0 } }] }] } },
+      { title: "打五折", productSlug: "c", promotions: { promotionalOffers: [{ promotionalOffers: [{ startDate: "2026-11-05T00:00:00Z", endDate: "2026-11-18T00:00:00Z", discountSetting: { discountPercentage: 50 } }] }] } },
+      { title: "即将开始", productSlug: "d", promotions: { promotionalOffers: [{ promotionalOffers: [{ startDate: "2026-11-20T00:00:00Z", endDate: "2026-11-27T00:00:00Z", discountSetting: { discountPercentage: 0 } }] }] } }
+    ] } } }
+  }
+  const items = parseEpic(sample, { now })
+  assert.deepEqual(items.map((item) => item.title), ["当前免费", "即将开始"])
+  assert.equal(items[0].category, "game")
+  assert.equal(items[0].url, "https://store.epicgames.com/zh-CN/p/a")
+  assert.equal(items[0].expiresAt, "2026-11-18T00:00:00.000Z")
+  assert.match(items[1].excerpt, /即将开始/)
+})
+
+test('Epic：返回结构变化时明确报错，不静默出空榜', async () => {
+  const { parseEpic } = await import("../dsh/sources.js")
+  assert.throws(() => parseEpic({ data: { nope: true } }), /结构变了/)
+})
+
+test('雷达：游戏条目绕开关键词表，过期条目自动下版', async () => {
+  const { buildRadar } = await import("../dsh/sources.js")
+  const now = Date.parse("2026-11-11T02:00:00Z")
+  const game = {
+    title: "浮游世界", url: "https://store.epicgames.com/zh-CN/p/x", source: "epic", category: "game",
+    createdAt: "2026-11-05T00:00:00Z", expiresAt: "2026-11-18T00:00:00Z", excerpt: "当前免费领取"
+  }
+  const expired = { ...game, title: "过期游戏", url: "https://store.epicgames.com/zh-CN/p/y", expiresAt: "2026-11-09T00:00:00Z" }
+  const plain = { title: "普通闲聊帖", url: "https://example.com/p", source: "v2ex", createdAt: "2026-11-11T00:00:00Z", excerpt: "" }
+  const items = buildRadar([game, expired, plain], { now })
+  assert.deepEqual(items.map((item) => item.title), ["浮游世界"], "游戏靠分类进榜，过期与无关帖都不进")
+  assert.equal(items[0].category, "game")
+  assert.equal(items[0].expiresAt, "2026-11-18T00:00:00Z")
+  assert.ok(items[0].score >= 70, "限免游戏应排在前面")
+})
+
+test('来源清单：七个源，NodeSeek 已改为可直连', async () => {
+  const { SOURCES } = await import("../dsh/sources.js")
+  const ids = SOURCES.map((source) => source.id)
+  assert.deepEqual(ids, ["linuxdo", "nodeseek", "appinn", "ghxi", "iplaysoft", "v2ex", "epic"])
+  assert.equal(SOURCES.find((source) => source.id === "nodeseek").kind, "both")
+  assert.equal(SOURCES.find((source) => source.id === "ghxi").kind, "direct")
+})
