@@ -263,9 +263,6 @@ export async function fetchIplaysoft({ fetchImpl = fetch } = {}) {
   }
 }
 
-export const EPIC_FREE_URL =
-  'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN'
-
 /**
  * Epic 免费游戏：从促销 JSON 里挑出「当前正在免费」和「即将开始免费」的商品。
  *
@@ -303,20 +300,45 @@ export function parseEpic(json, { now = Date.now() } = {}) {
   return items
 }
 
-/** Epic 免费游戏：JSON 接口。没有免费游戏是正常结果，不当失败。 */
-export async function fetchEpic({ fetchImpl = fetch, now = Date.now() } = {}) {
-  try {
-    const body = await getText(EPIC_FREE_URL, { fetchImpl, accept: 'application/json' })
-    let json
-    try {
-      json = JSON.parse(body)
-    } catch {
-      throw new Error('返回的不是合法 JSON')
+export const EPIC_FREE_URLS = [
+  'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN',
+  'https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions?locale=zh-CN&country=CN&allowCountries=CN'
+]
+export const EPIC_FREE_URL = EPIC_FREE_URLS[0]
+
+/**
+ * Epic 免费游戏：JSON 接口。没有免费游戏是正常结果，不当失败。
+ *
+ * 实测这个域名的**首次连接**经常超时（10 秒内失败），紧接着再连就 200 —— 典型的冷启动握手问题。
+ * 所以这里对「错误」重试，而不是交给 withRetry（后者会把「本周没有免费游戏」的空结果也当失败重试）。
+ * 主域名试完再试 ipv4 域名，两者返回同一份数据。
+ */
+export async function fetchEpic({
+  fetchImpl = fetch,
+  now = Date.now(),
+  attempts = 3,
+  timeoutMs = 20000,
+  waitMs = 600
+} = {}) {
+  const failures = []
+  for (const url of EPIC_FREE_URLS) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const body = await getText(url, { fetchImpl, accept: 'application/json', timeoutMs })
+        let json
+        try {
+          json = JSON.parse(body)
+        } catch {
+          throw new Error('返回的不是合法 JSON')
+        }
+        return { items: parseEpic(json, { now }), errors: [] }
+      } catch (error) {
+        failures.push(`${new URL(url).host} 第 ${attempt} 次：${error?.message || error}`)
+        if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, waitMs))
+      }
     }
-    return { items: parseEpic(json, { now }), errors: [] }
-  } catch (error) {
-    return { items: [], errors: [`Epic 免费游戏：${error?.message || error}`] }
   }
+  return { items: [], errors: [`Epic 免费游戏：${failures.slice(-2).join('；')}`] }
 }
 
 async function withRetry(task, { retries = 1, waitMs = 800 } = {}) {

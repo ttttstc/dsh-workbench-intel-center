@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { sortRadarItems, buildReviewPrompt, buildXPrompt, filterRadar, relativeTime, filterCards, formatWhen, highlightCards, todayISO } from '../src/shared/core.js'
+import { sortRadarItems, splitRadarItems, RADAR_CATEGORIES, buildReviewPrompt, buildXPrompt, filterRadar, relativeTime, filterCards, formatWhen, highlightCards, todayISO } from '../src/shared/core.js'
 
 const cards = [
   {
@@ -135,4 +135,21 @@ test('雷达排序：默认按羊毛分从高到低，同分再看时间', () =>
   ]
   assert.deepEqual(sortRadarItems(items).map((item) => item.title), ['高分新帖', '高分旧帖', '低分新帖', '没有分数'])
   assert.deepEqual(sortRadarItems(items, 'time').map((item) => item.title), ['没有分数', '低分新帖', '高分新帖', '高分旧帖'])
+})
+
+test('splitRadarItems：价格类与游戏类分开，游戏按截止时间从近到远', () => {
+  const items = [
+    { id: 'g2', category: 'game', title: '两周后到期', expiresAt: '2026-11-25T00:00:00Z' },
+    { id: 'a1', category: 'free', title: '普通免费' },
+    { id: 'g1', category: 'game', title: '明天到期', expiresAt: '2026-11-12T00:00:00Z' },
+    { id: 'g3', category: 'game', title: '没有截止时间' },
+    { id: 'b1', category: 'cheap', title: '低价' }
+  ]
+  const { games, offers } = splitRadarItems(items)
+  assert.deepEqual(offers.map((item) => item.id), ['a1', 'b1'], '价格维度里不含游戏')
+  assert.deepEqual(games.map((item) => item.id), ['g1', 'g2', 'g3'], '游戏按截止时间从近到远，没有截止的排最后')
+})
+
+test('雷达分类只剩价格维度，不再包含游戏', () => {
+  assert.deepEqual(RADAR_CATEGORIES.map((item) => item.id), ['limited', 'free', 'cheap', 'general'])
 })

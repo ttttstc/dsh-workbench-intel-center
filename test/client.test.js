@@ -141,3 +141,11 @@ test('有数据时渲染完整布局：标签栏、三个榜单与页脚都能�
   assert.ok(text.includes('08:00 / 12:00 / 16:00 / 20:00'), '小时表来自服务端常量，不是写死的文案')
   assert.ok(!text.includes('intel-err'), '没有错误时不该渲染错误条')
 })
+
+test('渲染：多了「游戏限免」页，游戏条目只出现在那一页', () => {
+  const definition = loadArtifact()
+  const react = makeReact()
+  const exports = definition.factory(() => react)
+  const tree = exports.Panel({ service: {}, conversation: null })
+  assert.match(JSON.stringify(tree), /游戏限免/)
+})
