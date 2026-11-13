@@ -149,3 +149,32 @@ test('渲染：多了「游戏限免」页，游戏条目只出现在那一页',
   const tree = exports.Panel({ service: {}, conversation: null })
   assert.match(JSON.stringify(tree), /游戏限免/)
 })
+
+test('渲染：雷达卡片带「AI 帮领」按钮，游戏页不提供代领', () => {
+  const definition = loadArtifact()
+  const react = makeReact({
+    firstState: {
+      version: 1,
+      cards: [],
+      topics: [],
+      linuxdo: { updatedAt: '', date: '', keywords: [], items: [] },
+      x: { updatedAt: '', date: '', keywords: [], items: [] },
+      radar: {
+        updatedAt: '2026-11-13T00:00:00.000Z',
+        date: '2026-11-13',
+        keywords: [],
+        items: [{
+          id: 'r1', title: '某云 免费 10GB', url: 'https://example.com/a', source: 'v2ex',
+          category: 'limited', score: 88, verdict: 'free', createdAt: '2026-11-13T00:00:00.000Z', excerpt: ''
+        }]
+      },
+      lastReviewedAt: '',
+      updatedAt: '2026-11-13T00:00:00.000Z'
+    }
+  })
+  const exports = definition.factory(() => react)
+  const text = JSON.stringify(exports.Panel({ service: {}, conversation: null }))
+  assert.match(text, /AI 帮领/, '每张羊毛卡片都要有生成领取指令的入口')
+  assert.match(text, /去原帖/, '卡片要有原文链接')
+  assert.match(text, /游戏限免/, '游戏单独一页')
+})

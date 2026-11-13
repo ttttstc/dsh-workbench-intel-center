@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { sortRadarItems, splitRadarItems, RADAR_CATEGORIES, buildReviewPrompt, buildXPrompt, filterRadar, relativeTime, filterCards, formatWhen, highlightCards, todayISO } from '../src/shared/core.js'
+import { sortRadarItems, splitRadarItems, RADAR_CATEGORIES, buildClaimPrompt, buildReviewPrompt, buildXPrompt, filterRadar, relativeTime, filterCards, formatWhen, highlightCards, todayISO } from '../src/shared/core.js'
 
 const cards = [
   {
@@ -152,4 +152,19 @@ test('splitRadarItems：价格类与游戏类分开，游戏按截止时间从�
 
 test('雷达分类只剩价格维度，不再包含游戏', () => {
   assert.deepEqual(RADAR_CATEGORIES.map((item) => item.id), ['limited', 'free', 'cheap', 'general'])
+})
+
+test('领取指令：带上条目信息、链接与安全边界', () => {
+  const text = buildClaimPrompt({
+    item: { title: '某云 免费 10GB', url: 'https://example.com/a', source: 'v2ex', score: 88, verdict: "conditional", excerpt: '需要绑卡' },
+    today: '2026-11-13'
+  })
+  assert.match(text, /某云 免费 10GB/)
+  assert.match(text, /https:\/\/example\.com\/a/)
+  assert.match(text, /有条件免费/)
+  assert.match(text, /先打开原帖/, '要求先读原帖再动手')
+  assert.match(text, /不输入、不索要、不保存任何密码/, '必须写明凭据边界')
+  assert.match(text, /不接受任何付费项/, '必须写明不付款')
+  assert.match(text, /把窗口留给我/, '遇到登录/验证码要交还给人')
+  assert.match(text, /以页面为准/, '帖子与页面不一致时以页面为准')
 })

@@ -36,6 +36,7 @@ const CORE_EXPORTS = [
   'filterCards',
   'highlightCards',
   'buildReviewPrompt',
+  'buildClaimPrompt',
   'buildXPrompt',
   'RADAR_CATEGORIES',
   'RADAR_CATEGORY_LABEL',
