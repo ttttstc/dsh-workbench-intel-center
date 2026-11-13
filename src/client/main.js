@@ -165,6 +165,11 @@ const CSS = `
 .intel-post-title{margin:0;font-size:15px;line-height:1.45;font-weight:700;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .intel-post-desc{margin:0;font-size:12px;line-height:1.55;color:var(--il-mute);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .intel-post-by{font-size:12.5px;color:var(--il-mute)}
+a.intel-post-title{color:inherit;text-decoration:none}
+a.intel-post-title:hover{text-decoration:underline}
+.intel-post-actions{display:flex;align-items:center;gap:10px;margin-top:2px;font-size:12px}
+.intel-post-actions .intel-btn{padding:2px 8px;font-size:11.5px}
+.intel-post-actions .intel-link{font-size:12px}
 /* ---- 外层：分段式 tab（与参考图一致）---- */
 .intel .intel-tabs{display:flex;align-items:stretch;border-bottom:2px solid var(--il-line);padding:0;overflow-x:auto;background:transparent}
 .intel .intel-tab{appearance:none;border:0;border-right:1px solid rgba(127,127,127,.28);background:transparent;color:var(--il-ink);font:inherit;font-size:13.5px;font-weight:700;padding:11px 18px;cursor:pointer;white-space:nowrap;display:flex;gap:7px;align-items:center;opacity:1}
@@ -773,6 +778,24 @@ function Panel(props) {
     }
   }, [meta, xFeed.keywords, xItems])
 
+  /** 「AI 帮领」：只对非游戏条目生成领取指令；游戏仍由用户自己点「去领取」。 */
+  const prepareClaim = useCallback(async (item) => {
+    const text = buildClaimPrompt({ item, today: todayISO() })
+    setPromptText(text)
+    setPromptKind('claim')
+    setCopied('')
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        setCopied('领取指令已复制：发到 AI 对话里，它会打开页面按步骤领取。')
+      } else {
+        setCopied('已生成，但当前环境不允许自动复制：点「复制提示词」再手动粘贴。')
+      }
+    } catch {
+      setCopied('领取指令已生成，请点「复制提示词」再粘贴到对话里。')
+    }
+  }, [])
+
   const copyPrompt = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(promptText)
@@ -1204,12 +1227,9 @@ function Panel(props) {
         h('span', null, offerItems.length === 0
           ? '点右上角「刷新」拉取七个来源：LINUX DO、NodeSeek、V2EX、小众软件、果核剥壳、异次元。'
           : (radarSince === 'today' ? '点「全部内容」看近 7 天，或刷新抓一次新的。' : '换个来源、标签或关键词试试。')))
-      : h('div', { className: 'intel-feed' }, radarShown.map((item) => h('a', {
+      : h('div', { className: 'intel-feed' }, radarShown.map((item) => h('div', {
         key: item.id || item.url,
-        className: 'intel-post',
-        href: item.url || '#',
-        target: '_blank',
-        rel: 'noreferrer noopener'
+        className: 'intel-post'
       },
       h('div', { className: 'intel-post-meta' },
         h('span', { className: 'intel-post-src' }, RADAR_SOURCE_LABEL[item.source] || item.source),
@@ -1219,11 +1239,27 @@ function Panel(props) {
         h('span', { className: 'intel-verify', 'data-verdict': item.verdict || 'unknown' }, ({ free: '真实免费', conditional: '有条件免费', discount: '只是优惠', unknown: '待判断' })[item.verdict] || '待判断'),
         item.expiresAt ? deadlineChip(item.expiresAt) : null,
         h('span', { className: 'intel-post-time' }, item.timeExact === false ? '最近活跃' : relativeTime(item.createdAt))),
-      h('h3', { className: 'intel-post-title' }, item.title),
+      h('a', {
+        className: 'intel-post-title',
+        href: item.url || '#',
+        target: '_blank',
+        rel: 'noreferrer noopener'
+      }, item.title),
       item.excerpt ? h('p', { className: 'intel-post-desc' }, item.excerpt) : null,
       item.author || item.handle
         ? h('div', { className: 'intel-post-by' }, item.handle || item.author)
-        : null))));
+        : null,
+      h('div', { className: 'intel-post-actions' },
+        h('a', {
+          className: 'intel-link',
+          href: item.url || '#',
+          target: '_blank',
+          rel: 'noreferrer noopener'
+        }, '去原帖 →'),
+        h('button', {
+          className: 'intel-btn intel-btn-ghost',
+          onClick: () => { void prepareClaim(item) }
+        }, 'AI 帮领'))))));
   // 「游戏」是内容类型，不是价格维度：单独一页，按截止时间从近到远。
   const gameRow = (item, index) => h('li', { key: item.id || item.url, className: 'intel-list-row' },
     h('span', { className: 'intel-rank' }, index + 1),
@@ -1333,10 +1369,14 @@ function Panel(props) {
           '会话正在准备中。如果一直没有内容，关掉抽屉后用左侧栏「新会话」创建，再回来打开。')))
     : null
 
-  const promptTitle = promptKind === 'review' ? '复核提示词已生成' : '抓取指令已生成'
+  const promptTitle = promptKind === 'review'
+    ? '复核提示词已生成'
+    : (promptKind === 'claim' ? '领取指令已生成' : '抓取指令已生成')
   const promptHint = promptKind === 'review'
     ? '把它发到本工作台的会话里，Agent 会联网核实并直接写回卡片数据文件；完成后回到这里点「刷新」。'
-    : '把它发到本工作台的会话里，Agent 会按指令抓取并写回数据文件；完成后回到这里点「刷新」。'
+    : (promptKind === 'claim'
+      ? '发到 AI 对话里，Agent 会先读原帖、再打开落地页按页面要求领取；遇到登录、验证码、绑卡或付费会停下来问你。'
+      : '把它发到本工作台的会话里，Agent 会按指令抓取并写回数据文件；完成后回到这里点「刷新」。')
 
   const modal = promptText
     ? h('div', { className: 'intel-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': promptTitle },
