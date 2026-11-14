@@ -18,7 +18,7 @@ function mount(root) {
       }
     }
   }
-  apply(ctx, { root })
+  apply(ctx, { root }, 'dsh-workbench-intel-center', { startScheduler: false })
   return async function call(pathname, init) {
     const route = routes.get(pathname)
     if (!route) throw new Error(`没有注册 ${pathname}`)

@@ -94,31 +94,69 @@ test('POST /radar/refresh 启动后台任务：立即 202，直连全成功时�
   assert.equal(state.body.state.radar.items[0].title, '免费领取 10 GB 云空间')
 })
 
-test('直连被 Cloudflare 挡住时才启用浏览器通道，且失败原因保留在结果里', async () => {
+test('直连 403 的来源自动改走浏览器通道，且失败原因保留在结果里', async () => {
+  const browserCalls = []
   const { call, api } = await mount({
     deps: {
       collectServerSources: async () => ({
         items: [radarItem('免费额度的直连条目', 'https://example.com/direct')],
-        errors: ['NodeSeek 最新：返回 403']
+        errors: ['LINUX DO 福利羊毛：返回 403', 'NodeSeek 最新：返回 403'],
+        // 新契约：每个来源各自报状态，只有「0 条且有错」的才值得走浏览器。
+        perSource: [
+          { id: 'linuxdo', count: 0, errors: ['返回 403'] },
+          { id: 'nodeseek', count: 0, errors: ['返回 403'] },
+          { id: 'v2ex', count: 1, errors: [] },
+          { id: 'epic', count: 0, errors: ['fetch failed'] }
+        ]
       }),
-      crawlBrowserFeeds: async () => ({
-        items: [radarItem('浏览器补抓的限免条目', 'https://example.com/browser')],
-        errors: ['LINUX DO 福利羊毛：浏览器也超时']
-      })
+      crawlBrowserSources: async ({ sources }) => {
+        browserCalls.push(sources)
+        return {
+          items: [radarItem('浏览器补抓的限免条目', 'https://example.com/browser')],
+          errors: ['nodeseek：浏览器兜底超时']
+        }
+      }
     }
   })
   await call('/api/intel-center/radar/refresh', { method: 'POST', body: '{}' })
   await waitJob(api.radarJob)
 
+  // epic 没有浏览器方案、v2ex 已经拿到数据，都不该被送进浏览器
+  assert.deepEqual(browserCalls[0], ['linuxdo', 'nodeseek'])
+
   const status = await call('/api/intel-center/radar/status')
   assert.equal(status.body.job.result.browserSkipped, false)
   assert.equal(status.body.job.result.browserCount, 1)
-  assert.equal(status.body.job.result.errors.length, 2, '直连与浏览器的失败都记录')
+  assert.deepEqual(status.body.job.result.browserSources, ['linuxdo', 'nodeseek'])
+  assert.equal(status.body.job.result.errors.length, 3, '直连与浏览器的失败都记录')
   const state = await call('/api/intel-center/state')
   assert.deepEqual(
     state.body.state.radar.items.map((item) => item.title).sort(),
     ['免费额度的直连条目', '浏览器补抓的限免条目']
   )
+})
+
+test('直连全部成功时不开浏览器通道', async () => {
+  const browserCalls = []
+  const { call, api } = await mount({
+    deps: {
+      collectServerSources: async () => ({
+        items: [radarItem('直连就够了的条目', 'https://example.com/ok')],
+        errors: [],
+        perSource: [{ id: 'v2ex', count: 1, errors: [] }]
+      }),
+      crawlBrowserSources: async ({ sources }) => {
+        browserCalls.push(sources)
+        return { items: [], errors: [] }
+      }
+    }
+  })
+  await call('/api/intel-center/radar/refresh', { method: 'POST', body: '{}' })
+  await waitJob(api.radarJob)
+
+  assert.equal(browserCalls.length, 0, '直连成功就不该占用浏览器')
+  const status = await call('/api/intel-center/radar/status')
+  assert.equal(status.body.job.result.browserSkipped, true)
 })
 
 test('抓取失败时不吞掉原因：job 进 failed，detail 可读', async () => {

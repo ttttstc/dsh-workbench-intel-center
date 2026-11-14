@@ -5,6 +5,8 @@
  * 不把脏数据落库。客户端提交的字段一律截断到上限，避免一条超长文本撑爆界面或文件。
  */
 
+import { normalizeSettings } from './schedule.js'
+
 export const MAX_CARDS = 500
 export const MAX_FEED_ITEMS = 500
 export const MAX_SUMMARY = 6
@@ -264,11 +266,36 @@ export function normalizeState(raw) {
     version: 1,
     cards,
     topics,
+    settings: normalizeSettings(raw.settings),
+    schedule: normalizeSchedule(raw.schedule),
     linuxdo: normalizeFeed(raw.linuxdo, 'ld'),
     x: normalizeFeed(raw.x, 'x'),
     radar: normalizeFeed(raw.radar, 'rd'),
     lastReviewedAt: text(raw.lastReviewedAt, 40),
     updatedAt: text(raw.updatedAt, 40)
+  }
+}
+
+/**
+ * 运行记录：最近若干次「什么时候、因为什么、跑成什么样」。
+ *
+ * 以前只有内存里的最后一次状态，重启即失忆，用户完全无法判断定时任务有没有跑过
+ * （界面上「上次刷新」只是榜单的写入时间，跟调度无关）。这里把历史落到 state.json。
+ */
+export function normalizeSchedule(raw) {
+  const source = isPlainObject(raw) ? raw : {}
+  const runs = Array.isArray(source.runs) ? source.runs : []
+  return {
+    lastRunAt: text(source.lastRunAt, 40),
+    lastTrigger: text(source.lastTrigger, 20),
+    runs: runs.slice(0, 20).map((run) => ({
+      at: text(run?.at, 40),
+      trigger: text(run?.trigger, 20),
+      ok: run?.ok !== false,
+      count: Number.isFinite(Number(run?.count)) ? Math.max(0, Math.round(Number(run.count))) : 0,
+      ms: Number.isFinite(Number(run?.ms)) ? Math.max(0, Math.round(Number(run.ms))) : 0,
+      error: text(run?.error, 200)
+    })).filter((run) => run.at)
   }
 }
 
@@ -297,6 +324,10 @@ export function mergeState(current, incoming) {
     const newer = Number.isFinite(sentAt) && (!Number.isFinite(keptAt) || sentAt > keptAt)
     if (!newer) next[key] = kept || sent
   }
+  // 设置归用户：界面一保存就以它为准（缺字段由 normalizeState 补默认值）。
+  // 运行记录归服务端：界面读到的是旧快照，不能让它覆盖磁盘上更新的记录。
+  next.settings = isPlainObject(next.settings) ? next.settings : stored.settings
+  next.schedule = isPlainObject(stored.schedule) ? stored.schedule : next.schedule
   return next
 }
 
@@ -337,6 +368,8 @@ export function emptyState() {
     version: 1,
     cards: [],
     topics: [],
+    settings: normalizeSettings(),
+    schedule: { lastRunAt: '', lastTrigger: '', runs: [] },
     linuxdo: emptyFeed(),
     x: emptyFeed(),
     radar: emptyFeed(),
