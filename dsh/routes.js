@@ -11,8 +11,8 @@
 import { MAX_STATE_BYTES, createIntelStore } from './store.js'
 import { ValidationError, mergeState, normalizeState } from './model.js'
 import { WOOL_ORIGIN, WOOL_URL, createWoolFetcher, prepareEmbedHtml } from './wool.js'
-import { DEFAULT_KEYWORDS, crawlBrowserFeeds, crawlX } from './crawler.js'
-import { RUN_HOURS, createRefreshScheduler, nextRunAt } from './schedule.js'
+import { BROWSER_SOURCES, DEFAULT_KEYWORDS, crawlBrowserFeeds, crawlBrowserSources, crawlX } from './crawler.js'
+import { RUN_HOURS, createTickScheduler, nextRunAt, normalizeSettings } from './schedule.js'
 import { MAX_AGE_DAYS, MAX_RADAR_ITEMS, SOURCES, buildRadar, collectServerSources } from './sources.js'
 import { createJob, lastRunOf } from './jobs.js'
 import { API_VERSION, X_TOP_LIMIT, todayISO } from '../src/shared/core.js'
@@ -65,6 +65,7 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center', de
   const keywords = Array.isArray(deps.keywords) && deps.keywords.length ? deps.keywords : DEFAULT_KEYWORDS
   const fetchServerSources = deps.collectServerSources || collectServerSources
   const fetchBrowserFeeds = deps.crawlBrowserFeeds || crawlBrowserFeeds
+  const fetchBrowserSources = deps.crawlBrowserSources || crawlBrowserSources
   const fetchX = deps.crawlX || crawlX
   const jobTimeoutMs = Number.isFinite(deps.jobTimeoutMs) ? deps.jobTimeoutMs : 300000
   const noStore = { 'cache-control': 'no-store' }
@@ -102,17 +103,15 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center', de
 
   async function runRadar(reason) {
     const startedAt = now().toISOString()
-    // 先跑六个直连源；只有 LINUX DO / NodeSeek 被 Cloudflare 挡时，才动用浏览器通道，
-    // 而且只用它去抓真正失败的那个源（NodeSeek 有官方 RSS，直连成功时不该再让浏览器抓一遍）。
+    // 先跑直连源。哪个源「0 条且有错」就改走浏览器通道——不再靠错误文案里有没有「LINUX DO」
+    // 来判断：403 / Cloudflare / 与系统代理不同的出口 IP，都会落到这条路径上。
     const server = await fetchServerSources()
-    const errorText = (server.errors || []).join(' ')
-    const includeLinuxdo = /LINUX DO/.test(errorText)
-    // NodeSeek：直连失败必须走浏览器；直连成功时，如果浏览器已经因为 linux.do 开着，
-    // 就顺带抓一次「推广」版块——官方 RSS 是全站的，过滤后召回声比版块页低，而这一步不额外开页面。
-    const includeNodeSeek = /NodeSeek/.test(errorText) || includeLinuxdo
-    const needsBrowser = includeLinuxdo || includeNodeSeek
-    const browser = needsBrowser
-      ? await fetchBrowserFeeds({ log: () => {}, includeLinuxdo, includeNodeSeek })
+    const perSource = server.perSource || []
+    const blocked = perSource
+      .filter((item) => item.count === 0 && item.errors.length && BROWSER_SOURCES[item.id])
+      .map((item) => item.id)
+    const browser = blocked.length
+      ? await fetchBrowserSources({ sources: blocked, log: () => {} })
         .catch((error) => ({ items: [], errors: [String(error?.message || error)] }))
       : { items: [], errors: [] }
     const all = [...(server.items || []), ...(browser.items || [])]
@@ -123,17 +122,20 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center', de
       if (!item?.source) continue
       bySource[item.source] = (bySource[item.source] || 0) + 1
     }
-    return {
+    const result = {
       ok: true,
       count: merged.length,
       fresh: all.length,
       serverCount: (server.items || []).length,
       browserCount: (browser.items || []).length,
-      browserSkipped: !needsBrowser,
+      browserSkipped: blocked.length === 0,
+      browserSources: blocked,
       bySource,
       errors,
       reason
     }
+    await appendRun({ startedAt, trigger: reason, ok: true, count: all.length, errors })
+    return result
   }
 
   // ---- X 榜单：同一套流程，只是来源是 X 搜索页 ----
@@ -159,7 +161,51 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center', de
         items: merged
       }
     })
-    return { ok: true, count: merged.length, fresh: items.length, scanned, errors, reason }
+    const result = { ok: true, count: merged.length, fresh: items.length, scanned, errors, reason }
+    await appendRun({ startedAt, trigger: reason, ok: true, count: items.length, errors })
+    return result
+  }
+
+  /**
+   * 运行记录：定时 / 手动都记一笔（时间、触发方式、条数、耗时、首个错误）。
+   *
+   * 以前只有内存里的最后一次状态，重启就失忆，用户没有依据判断「定时任务到底跑没跑」。
+   * 顺带把 errors 的前两条留下，界面上就能看到「这次是哪个源被挡了」。
+   */
+  async function appendRun({ startedAt, trigger, ok, count, errors }) {
+    try {
+      const current = await store.read()
+      const at = now().toISOString()
+      const entry = {
+        at: startedAt,
+        trigger: trigger === 'scheduled' ? 'scheduled' : 'manual',
+        ok: ok !== false,
+        count: Math.max(0, Math.round(Number(count) || 0)),
+        ms: Math.max(0, Date.parse(at) - Date.parse(startedAt) || 0),
+        error: (errors || []).filter(Boolean).slice(0, 2).join('；').slice(0, 200)
+      }
+      const runs = [entry, ...(current.schedule?.runs || [])].slice(0, 20)
+      await store.write({ ...current, schedule: { ...(current.schedule || {}), runs } })
+    } catch (error) {
+      console.error(`[intel-center] 写运行记录失败：${error?.message || error}`)
+    }
+  }
+
+  /** 标记「这个槽位处理过了」：不管成功失败都要写，否则调度器会每 60 秒重试一次。 */
+  async function markSlotRan(trigger) {
+    try {
+      const current = await store.read()
+      await store.write({
+        ...current,
+        schedule: {
+          ...(current.schedule || {}),
+          lastRunAt: now().toISOString(),
+          lastTrigger: trigger === 'scheduled' ? 'scheduled' : 'manual'
+        }
+      })
+    } catch (error) {
+      console.error(`[intel-center] 写调度状态失败：${error?.message || error}`)
+    }
   }
 
   const logFailure = (label) => (snapshot) => {
@@ -193,18 +239,39 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center', de
     return xJob.start(xReason)
   }
 
-  // 一个调度器同时负责两份榜单：时间表只有 RUN_HOURS 一处真相，先雷达后 X，串行执行。
-  const scheduler = createRefreshScheduler({
+  // 调度器改成「每 60 秒检查一次有没有该跑的槽位」，而不是一次性的 setTimeout：
+  // - 睡眠 / 关机 / 进程重启后能补跑最近错过的槽位（6 小时窗口内）
+  // - 设置改完立刻生效（每次 tick 都从 state 里读）
+  // - 上次运行时间持久化在 state.schedule 里，重启不会重复跑、也不会忘记跑
+  let tickCache = null
+  async function readStateCached() {
+    const at = Date.now()
+    if (tickCache && at - tickCache.at < 1000) return tickCache.state
+    const state = await store.read()
+    tickCache = { at, state }
+    return state
+  }
+
+  const scheduler = createTickScheduler({
     now,
-    run: async () => {
-      startRadar('scheduled')
-      await radarJob.wait()
-      startX('scheduled')
-      await xJob.wait()
+    tickMs: Number.isFinite(deps.tickMs) ? deps.tickMs : undefined,
+    getSettings: async () => normalizeSettings((await readStateCached()).settings),
+    getLastRunAt: async () => (await readStateCached()).schedule?.lastRunAt || '',
+    onDue: async () => {
+      try {
+        startRadar('scheduled')
+        await radarJob.wait()
+        startX('scheduled')
+        await xJob.wait()
+      } finally {
+        // 成功失败都算「这个槽位已经处理过」，否则会每 60 秒重试一次
+        await markSlotRan('scheduled')
+      }
     },
     onScheduled: (next) => {
       nextRunAtValue = next
-    }
+    },
+    onError: (error) => console.error(`[intel-center] 定时调度失败：${error?.message || error}`)
   })
   const schedulerKey = String(config.root)
   if (deps.startScheduler !== false) {
@@ -225,11 +292,19 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center', de
     methods: ['GET'],
     requestBody: 'buffered',
     async fetch() {
+      const state = await store.read()
+      const settings = normalizeSettings(state.settings)
+      const next = nextRunAtValue instanceof Date && Number.isFinite(nextRunAtValue.getTime())
+        ? nextRunAtValue
+        : nextRunAt(now(), settings.scheduler.hours)
       return json({
-        nextRunAt: nextRunAtValue.toISOString(),
-        hours: RUN_HOURS,
+        nextRunAt: next.toISOString(),
+        hours: settings.scheduler.hours,
+        enabled: settings.scheduler.enabled,
+        catchUp: settings.scheduler.catchUp,
+        retentionDays: settings.retentionDays,
+        schedule: state.schedule || { lastRunAt: '', lastTrigger: '', runs: [] },
         running: radarJob.running,
-        retentionDays: MAX_AGE_DAYS,
         limit: MAX_RADAR_ITEMS,
         sources: SOURCES,
         job: radarJob.snapshot(),

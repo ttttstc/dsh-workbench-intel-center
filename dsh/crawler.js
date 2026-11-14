@@ -64,18 +64,37 @@ export function createCdpClient(base = CDP_BASE) {
   }
 
   return {
+    // v2.5.3 起 GET /new?url= 会返回 400：新建 tab 改成 POST，URL 放在请求体里。
+    // 新老契约都试一遍，代理升级/回退都不会让浏览器通道整段失效。
     newTab: async (url) => {
-      const data = await call(`/new?url=${encodeURIComponent(url)}`)
-      const payload = typeof data === 'string' ? JSON.parse(data) : data
-      if (!payload?.targetId) throw new Error('CDP 没能创建浏览器标签页')
-      return payload.targetId
+      let payload = null
+      try {
+        const data = await call('/new', { method: 'POST', body: url, timeoutMs: 45000 })
+        payload = typeof data === 'string' ? JSON.parse(data) : data
+      } catch {
+        const data = await call(`/new?url=${encodeURIComponent(url)}`, { timeoutMs: 45000 })
+        payload = typeof data === 'string' ? JSON.parse(data) : data
+      }
+      const targetId = payload?.targetId || payload?.target?.targetId || payload?.id
+      if (!targetId) throw new Error('CDP 没能创建浏览器标签页')
+      return targetId
     },
+    navigate: async (target, url) =>
+      call(`/navigate?target=${encodeURIComponent(target)}`, { method: 'POST', body: url, timeoutMs: 45000 }),
     eval: async (target, js) => {
       const data = await call(`/eval?target=${encodeURIComponent(target)}`, { method: 'POST', body: js })
       const payload = typeof data === 'string' ? JSON.parse(data) : data
       return payload?.value
     },
-    scrollBottom: (target) => call(`/scroll?target=${encodeURIComponent(target)}&direction=bottom`),
+    // 新契约的滚动要带 y（direction 只决定正负）；老契约用 direction=bottom。
+    scrollBottom: async (target) => {
+      const id = encodeURIComponent(target)
+      try {
+        await call(`/scroll?target=${id}&y=2000&direction=down`)
+      } catch {
+        await call(`/scroll?target=${id}&direction=bottom`)
+      }
+    },
     close: (target) => call(`/close?target=${encodeURIComponent(target)}`)
   }
 }
@@ -217,3 +236,78 @@ export async function crawlBrowserFeeds({
 
   return { items, errors }
 }
+
+/**
+ * 每个来源在浏览器通道里的取数方案：home 用于建立同源会话（顺带过 Cloudflare 的 cookie 校验），
+ * paths 用页面内 fetch 取正文，parse 决定用哪个解析器。
+ *
+ * 这份表的意义：直连被 403 时不再写死「只有 linux.do / NodeSeek 值得兜底」，
+ * 任何在这里登记过的源都能自动改走浏览器（用你 Chrome 的登录态与系统代理）。
+ */
+export const BROWSER_SOURCES = {
+  linuxdo: {
+    home: 'https://linux.do/c/welfare/36',
+    paths: ['/c/welfare/36.rss', '/c/welfare/36.rss?page=2', '/c/welfare/36.rss?page=3'],
+    parse: 'rss'
+  },
+  nodeseek: {
+    home: 'https://www.nodeseek.com/categories/promotion',
+    paths: ['/categories/promotion', '/categories/promotion?page=2', '/categories/promotion?page=3'],
+    parse: 'nodeseek'
+  },
+  appinn: { home: 'https://www.appinn.com/', paths: ['/feed/'], parse: 'rss' },
+  ghxi: { home: 'https://www.ghxi.com/', paths: ['/feed'], parse: 'rss' },
+  iplaysoft: { home: 'https://www.iplaysoft.com/', paths: ['/feed'], parse: 'rss' },
+  v2ex: {
+    home: 'https://www.v2ex.com/go/deals',
+    paths: ['/feed/deals.xml'],
+    parse: 'rss',
+    linkBase: 'https://www.v2ex.com'
+  }
+}
+
+/**
+ * 用浏览器兜底抓指定来源。串行执行：一个标签页抓完关掉再开下一个，
+ * 避免同时在用户 Chrome 里堆一堆后台页。
+ */
+export async function crawlBrowserSources({
+  sources = [],
+  cdp = createCdpClient(),
+  pageWaitMs = 4000,
+  log = () => {}
+} = {}) {
+  const items = []
+  const errors = []
+  for (const id of sources) {
+    const plan = BROWSER_SOURCES[id]
+    if (!plan) continue
+    let tab = null
+    try {
+      tab = await cdp.newTab(plan.home)
+      await sleep(pageWaitMs)
+      let count = 0
+      for (const path of plan.paths) {
+        const raw = await cdp.eval(
+          tab,
+          '(async () => { try { const r = await fetch(' + JSON.stringify(path) +
+            ', { credentials: "include" }); return r.ok ? await r.text() : ""; } catch (e) { return ""; } })()'
+        )
+        if (!raw || typeof raw !== 'string') continue
+        const parsed = plan.parse === 'nodeseek'
+          ? parseNodeSeek(raw)
+          : parseRss(raw, { source: id, linkBase: plan.linkBase })
+        if (parsed.length) {
+          items.push(...parsed)
+          count += parsed.length
+        }
+      }
+      log(`${id}：浏览器兜底 ${count} 条`)
+    } catch (error) {
+      errors.push(`${id}：浏览器兜底失败（${error?.message || error}）`)
+    } finally {
+      if (tab) await cdp.close(tab).catch(() => {})
+    }
+  }
+  return { items, errors }
+}
+

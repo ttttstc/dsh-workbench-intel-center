@@ -173,11 +173,28 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 async function getText(url, { fetchImpl = fetch, timeoutMs = 15000, accept = '*/*' } = {}) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+  // 不少站按「有没有 referer / sec-fetch-*」判爬虫，缺这些头的直连会被直接 403。
+  // 这几项对齐真实浏览器的同源 fetch，能让 RSS 这类公开端点正常返回。
+  const origin = (() => {
+    try {
+      return new URL(url).origin + '/'
+    } catch {
+      return ''
+    }
+  })()
   try {
-    const response = await fetchImpl(url, {
-      headers: { 'user-agent': UA, accept, 'cache-control': 'no-cache', pragma: 'no-cache' },
-      signal: controller.signal
-    })
+    const headers = {
+      'user-agent': UA,
+      accept,
+      'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      'cache-control': 'no-cache',
+      pragma: 'no-cache',
+      'sec-fetch-site': 'same-origin',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-dest': 'empty'
+    }
+    if (origin) headers.referer = origin
+    const response = await fetchImpl(url, { headers, signal: controller.signal })
     if (!response.ok) throw new Error(`返回 ${response.status}`)
     return await response.text()
   } finally {
@@ -369,9 +386,18 @@ export async function collectServerSources({ fetchImpl = fetch, now = Date.now()
     fetchEpic({ fetchImpl, now })
   ])
   const results = [v2, ap, gh, ip, ns, ld, epic]
+  const ids = ['v2ex', 'appinn', 'ghxi', 'iplaysoft', 'nodeseek', 'linuxdo', 'epic']
+  // perSource：哪个源拿了几条、报了什么错。路由据此决定「要不要改走浏览器」——
+  // 以前靠错误文案里有没有「LINUX DO」来判断，一个 403 文案变体就漏掉兜底。
+  const perSource = results.map((result, index) => ({
+    id: ids[index],
+    count: (result.items || []).length,
+    errors: (result.errors || []).map(String)
+  }))
   return {
     items: results.flatMap((result) => result.items || []),
-    errors: results.flatMap((result) => result.errors || [])
+    errors: results.flatMap((result) => result.errors || []),
+    perSource
   }
 }
 

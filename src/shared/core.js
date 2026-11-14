@@ -310,7 +310,7 @@ export const X_TOP_LIMIT = 200
  * 客户端产物与插件服务端是两条加载路径：换版本后服务端要等 Harness 重启才用上新代码，
  * 而客户端 bundle 打开即生效。没有这个握手，界面只会表现为「刷新没反应」。
  */
-export const API_VERSION = 4
+export const API_VERSION = 5
 
 /**
  * 写回规则：把「谁能改哪些字段」写给 Agent 看。
