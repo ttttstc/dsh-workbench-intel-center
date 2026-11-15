@@ -398,6 +398,7 @@ function Panel(props) {
   const [xBusy, setXBusy] = useState(false)
   const [radarSource, setRadarSource] = useState('')
   const [radarCategory, setRadarCategory] = useState('')
+  const [radarTopic, setRadarTopic] = useState('')
   const [radarQuery, setRadarQuery] = useState('')
   const [radarKeyword, setRadarKeyword] = useState('')
   const [radarSince, setRadarSince] = useState('')
@@ -753,7 +754,8 @@ function Panel(props) {
     appinn: '小众软件',
     ghxi: '果核剥壳',
     iplaysoft: '异次元',
-    epic: 'Epic'
+    epic: 'Epic',
+    zcl: '资源雷达'
   }
 
   // 时间表只有一处真值（服务端 RUN_HOURS），界面把它渲染出来，不另写一份文案。
@@ -775,8 +777,17 @@ function Panel(props) {
     return `上次抓到 ${job.result.fresh ?? 0} 条 · 用时 ${seconds}s${parts.length ? '（' + parts.join(' / ') + '）' : ''}`
   }
 
-  const radarVisible = useMemo(() => filterRadar(offerItems, { source: radarSource, category: radarCategory, q: radarQuery }), [offerItems, radarSource, radarCategory, radarQuery])
+  const radarVisible = useMemo(() => filterRadar(offerItems, { source: radarSource, category: radarCategory, topic: radarTopic, q: radarQuery }), [offerItems, radarSource, radarCategory, radarTopic, radarQuery])
   const radarSourcesPresent = useMemo(() => { const seen = new Map(); for (const item of offerItems) seen.set(item.source, (seen.get(item.source) || 0) + 1); return [...seen.entries()] }, [offerItems])
+  // 主题分类（影音会员 / AI 额度 / 云服务 …）：出现的才显示，避免一排空按钮
+  const radarTopicChips = useMemo(() => {
+    const seen = new Map()
+    for (const item of offerItems) {
+      const topic = item.topic || 'other'
+      seen.set(topic, (seen.get(topic) || 0) + 1)
+    }
+    return [...seen.entries()].sort((a, b) => b[1] - a[1])
+  }, [offerItems])
 
   const activeFilters = Boolean(q || category || status || flag || minScore)
   const resetFilters = () => { setQ(''); setCategory(''); setStatus(''); setFlag(''); setMinScore('') }
@@ -1190,7 +1201,7 @@ function Panel(props) {
     if (radarKeyword && !top.some(([word]) => word === radarKeyword)) return [...top, [radarKeyword, 0]]
     return top
   })()
-  const radarFilterActive = Boolean(radarSource || radarCategory || radarQuery || radarKeyword || radarSince)
+  const radarFilterActive = Boolean(radarSource || radarCategory || radarTopic || radarQuery || radarKeyword || radarSince)
 
   const radarBody = h('div', { className: 'intel-body intel-radar' },
     // 顶部统计条
@@ -1324,6 +1335,7 @@ function Panel(props) {
           className: 'intel-btn intel-btn-ghost',
           onClick: () => {
             setRadarSource('')
+            setRadarTopic('')
             setRadarCategory('')
             setRadarQuery('')
             setRadarKeyword('')
@@ -1331,6 +1343,25 @@ function Panel(props) {
           }
         }, '清空筛选')
         : null),
+
+    // 主题分类（影音会员 / AI 额度 / 云服务 / VPS 主机 / 域名建站 …）：
+    // 与「价格」是两个维度，单独一排，可以和标签叠加使用。
+    radarTopicChips.length > 0
+      ? h('div', { className: 'intel-tagrow' },
+        h('div', { className: 'intel-taglist' },
+          h('span', { className: 'intel-kwlabel' }, '主题'),
+          h('button', {
+            className: 'intel-tag',
+            'data-on': radarTopic ? '0' : '1',
+            onClick: () => setRadarTopic('')
+          }, '全部'),
+          radarTopicChips.map(([topic, count]) => h('button', {
+            key: topic,
+            className: 'intel-tag',
+            'data-on': radarTopic === topic ? '1' : '0',
+            onClick: () => setRadarTopic(radarTopic === topic ? '' : topic)
+          }, RADAR_TOPIC_LABEL[topic] || topic, h('span', { className: 'intel-kw-count' }, count)))))
+      : null,
 
     // 关键词 chips
     radarKeywordChips.length > 0

@@ -23,7 +23,8 @@ export const SOURCES = [
   { id: 'ghxi', name: '果核剥壳', home: 'https://www.ghxi.com/', kind: 'direct' },
   { id: 'iplaysoft', name: '异次元软件世界', home: 'https://www.iplaysoft.com/', kind: 'direct' },
   { id: 'v2ex', name: 'V2EX 优惠信息', home: 'https://www.v2ex.com/go/deals', kind: 'direct' },
-  { id: 'epic', name: 'Epic 免费游戏', home: 'https://store.epicgames.com/zh-CN/free-games', kind: 'direct' }
+  { id: 'epic', name: 'Epic 免费游戏', home: 'https://store.epicgames.com/zh-CN/free-games', kind: 'direct' },
+  { id: 'zcl', name: '资源雷达', home: 'https://radar.zichuanlan.top/', kind: 'direct' }
 ]
 
 /** 收录关键词：标题或摘要命中任一才进榜。 */
@@ -375,7 +376,7 @@ async function withRetry(task, { retries = 1, waitMs = 800 } = {}) {
 
 /** 六个直连来源（LINUX DO 与 NodeSeek 直连失败时，由浏览器通道兜底）。 */
 export async function collectServerSources({ fetchImpl = fetch, now = Date.now() } = {}) {
-  const [v2, ap, gh, ip, ns, ld, epic] = await Promise.all([
+  const [v2, ap, gh, ip, ns, ld, epic, up] = await Promise.all([
     withRetry(() => fetchV2ex({ fetchImpl })),
     withRetry(() => fetchAppinn({ fetchImpl })),
     withRetry(() => fetchGhxi({ fetchImpl })),
@@ -383,10 +384,12 @@ export async function collectServerSources({ fetchImpl = fetch, now = Date.now()
     withRetry(() => fetchNodeSeek({ fetchImpl })),
     withRetry(() => fetchLinuxdo({ fetchImpl }), { retries: 0 }),
     // Epic 没有免费游戏是正常结果，交给 withRetry 会把它当失败重试，所以直接调用。
-    fetchEpic({ fetchImpl, now })
+    fetchEpic({ fetchImpl, now }),
+    // 资源雷达：公开 JSON 接口，自带 AI 分类与「可领取」判断。
+    fetchUpstream({ fetchImpl, now })
   ])
-  const results = [v2, ap, gh, ip, ns, ld, epic]
-  const ids = ['v2ex', 'appinn', 'ghxi', 'iplaysoft', 'nodeseek', 'linuxdo', 'epic']
+  const results = [v2, ap, gh, ip, ns, ld, epic, up]
+  const ids = ['v2ex', 'appinn', 'ghxi', 'iplaysoft', 'nodeseek', 'linuxdo', 'epic', 'zcl']
   // perSource：哪个源拿了几条、报了什么错。路由据此决定「要不要改走浏览器」——
   // 以前靠错误文案里有没有「LINUX DO」来判断，一个 403 文案变体就漏掉兜底。
   const perSource = results.map((result, index) => ({
@@ -454,11 +457,13 @@ export const WOOL_SIGNALS = {
   closed: /(已开奖|已结束|已抢完|名额已满|已截止|已过期|活动结束|已领完)/,
   discussion: /(求推荐|怎么领|有没有|求助|请问|问一下|聊聊|讨论|如何看待)/,
   aff: /(返利|aff|affiliate|推广|小黄车|带货|分销|返佣)/i,
+  // 转卖/求购帖：常被上游误标成 freebie，本质是二手交易而不是官方福利
+  sell: /(\[出\]|【出】|打包出|转让|出闲置|求购|代收|代购|收\s*[:：])/,
   urgency: /(限时|今日|今天|最后一天|仅剩|倒计时|还剩)/
 }
 
 /** 来源可信度：福利版块 > 技术社区 > 软件站（软件站的帖子多是发版信息）。 */
-const SOURCE_TRUST = { linuxdo: 10, nodeseek: 8, epic: 8, v2ex: 6, x: 5, appinn: 3, ghxi: 2, iplaysoft: 2 }
+const SOURCE_TRUST = { linuxdo: 10, nodeseek: 8, epic: 8, zcl: 7, v2ex: 6, x: 5, appinn: 3, ghxi: 2, iplaysoft: 2 }
 
 export function scoreWool(item, { now = Date.now() } = {}) {
   const text = `${item.title || ''} ${item.excerpt || ''}`
@@ -468,15 +473,19 @@ export function scoreWool(item, { now = Date.now() } = {}) {
     if (delta) reasons.push({ code, label, delta })
   }
 
+  // 上游（资源雷达）已经用 AI 判过 obtain/kind，这类结构化判断比关键词更准，优先采用。
+  const hints = item.hints && typeof item.hints === 'object' ? item.hints : {}
+  // 只认文本里的免费字样：上游对新闻/交易帖也会标 free，不能单凭它判「可薅」。
   const isFree = hit(WOOL_SIGNALS.free)
   const hasValue = hit(WOOL_SIGNALS.value)
-  const hasAction = hit(WOOL_SIGNALS.action)
-  const hasCondition = hit(WOOL_SIGNALS.condition)
-  const isLottery = hit(WOOL_SIGNALS.lottery)
+  const hasAction = hints.action === true || hit(WOOL_SIGNALS.action)
+  const hasCondition = hints.conditional === true || hit(WOOL_SIGNALS.condition)
+  const isLottery = hints.lottery === true || hit(WOOL_SIGNALS.lottery)
   const isClosed = hit(WOOL_SIGNALS.closed)
   const isTalk = hit(WOOL_SIGNALS.discussion)
   const isAff = hit(WOOL_SIGNALS.aff)
-  const isDiscount = hit(WOOL_SIGNALS.discount)
+  const isDiscount = hints.discount === true || hit(WOOL_SIGNALS.discount)
+  const isSell = hit(WOOL_SIGNALS.sell)
 
   let score = 18
   if (isFree) {
@@ -547,6 +556,10 @@ export function scoreWool(item, { now = Date.now() } = {}) {
     score -= 45
     add('closed', '活动已结束 / 已开奖', -45)
   }
+  if (isSell) {
+    score -= 20
+    add('sell', '是转卖 / 交易帖，不是官方福利', -20)
+  }
 
   score = Math.max(1, Math.min(100, Math.round(score)))
 
@@ -555,6 +568,7 @@ export function scoreWool(item, { now = Date.now() } = {}) {
   if (isClosed) tier = 'closed'
   else if (isTalk && !isFree) tier = 'talk'
   else if (isLottery) tier = 'lottery'
+  else if (isSell) tier = 'discount'
   else if (isFree && hasCondition) tier = 'conditional'
   else if (isFree) tier = 'claimable'
   else if (isAff || isDiscount) tier = 'discount'
@@ -587,7 +601,9 @@ export function buildRadar(rawItems, { now = Date.now(), days = MAX_AGE_DAYS, li
     const text = `${raw.title} ${raw.excerpt}`
     // 游戏是解析器直接判定的分类：游戏名里通常没有「免费」，不该被关键词表挡掉。
     const declaredGame = raw.category === 'game'
-    if (!declaredGame && !matchesKeywords(text)) continue
+    // 上游条目（带 topic）已经被它的 AI 与 kind 闸门筛过一遍，不该再被我们的关键词表挡掉。
+    const fromUpstream = Boolean(raw.topic) && raw.source === 'zcl'
+    if (!declaredGame && !fromUpstream && !matchesKeywords(text)) continue
     const rawCat = declaredGame ? 'game' : classify(text)
     // 命中关键词但归不到三类的（比如只说「福利」「抽奖」），保留为「一般」，
     // 否则版块里大量有效帖子会被关键词表挡掉。
@@ -600,6 +616,7 @@ export function buildRadar(rawItems, { now = Date.now(), days = MAX_AGE_DAYS, li
       ...raw,
       category,
       score: graded.score,
+      topic: raw.topic || topicOf(text, category),
       tier: graded.tier,
       reasons: graded.reasons,
       verdict: graded.verdict,
@@ -620,4 +637,159 @@ export function buildRadar(rawItems, { now = Date.now(), days = MAX_AGE_DAYS, li
       return (CATEGORY_PRIORITY[a.category] ?? 9) - (CATEGORY_PRIORITY[b.category] ?? 9)
     })
     .slice(0, limit)
+}
+
+// ---- 资源雷达（radar.zichuanlan.top）：公开 JSON 接口，自带 AI 分类与「可领取」判断 ----
+
+export const UPSTREAM_BASE = 'https://radar.zichuanlan.top/api/items'
+
+/**
+ * 它的分类 → 我们的主题分类。
+ * 只收「能薅」的类目：world / news / headline / tech / finance / stock / hardware / car
+ * 是资讯与评测，收进来只会稀释雷达。
+ */
+export const UPSTREAM_TOPIC = {
+  media: 'media',
+  ai: 'ai',
+  cloud: 'cloud',
+  vps: 'vps',
+  domain: 'web',
+  dev: 'web',
+  software: 'web',
+  game: 'game',
+  goods: 'deal',
+  trade: 'deal',
+  carpool: 'deal',
+  edu: 'edu',
+  other: 'other'
+}
+
+/** obtain（它的 AI 可领取判断）→ 我们的 hints：直接用它的结论，比关键词准。 */
+function upstreamHints(raw) {
+  const obtain = String(raw?.obtain || '').toLowerCase()
+  const kind = String(raw?.kind || '')
+  // 它对「交易/出二手」类帖子也会给 obtain=free，但那些不是羊毛。
+  // 只有 kind=freebie（免费领取）才认作免费；deal 一律按特价处理。
+  const isFree = kind === 'freebie' && obtain !== 'paid'
+  return {
+    free: isFree,
+    conditional: isFree && obtain === 'conditional',
+    lottery: obtain === 'lottery',
+    discount: !isFree || obtain === 'paid' || obtain === 'promo'
+  }
+}
+
+export function parseUpstreamItems(json, { now = Date.now() } = {}) {
+  const list = Array.isArray(json?.items) ? json.items : []
+  const items = []
+  for (const raw of list) {
+    if (!raw?.url || !raw?.title) continue
+    if (String(raw.status || 'active') !== 'active') continue
+    const kind = String(raw.kind || '')
+    // 只有 freebie（免费领取）与 deal（特价线报）是羊毛；info / news 是资讯，noise 是噪声。
+    // 它的 ai.keep 判得偏松（新闻也会 keep=true），所以在 kind 这一层收口。
+    if (kind !== 'freebie' && kind !== 'deal') continue
+    // noise / news 基本没有可领的东西；freebie 与 deal 才是羊毛
+    if (kind === 'noise' || kind === 'news') continue
+    const topic = UPSTREAM_TOPIC[String(raw.category || '')]
+    if (!topic) continue
+    const expires = Date.parse(raw.expires_at)
+    if (Number.isFinite(expires) && expires <= now) continue
+    const created = Date.parse(raw.published_at) || Date.parse(raw.first_seen_at) || now
+    const hints = upstreamHints(raw)
+    // 两个独立判断要一致：它说免费，但标题/摘要里看不出任何免费字样（新闻、评测常被这样误标），
+    // 就降级成特价，让用户自己点进去判断，而不是替他拍板。
+    const looksFree = /(免费|白送|赠送|领取|限免|0\s*元|零元|试用|送\s*\d)/.test(raw.title + ' ' + (raw.summary || ''))
+    if (hints.free && !looksFree) {
+      hints.free = false
+      hints.discount = true
+    }
+    items.push({
+      source: 'zcl',
+      title: String(raw.title).slice(0, 300),
+      url: String(raw.url),
+      excerpt: String(raw.summary || '').slice(0, 300),
+      author: String(raw.author || ''),
+      createdAt: new Date(created).toISOString(),
+      expiresAt: Number.isFinite(expires) ? new Date(expires).toISOString() : '',
+      topic,
+      hints,
+      heat: 0
+    })
+  }
+  return items
+}
+
+/** 抓 N 页（默认 3 页 × 100 条）；某一页失败不影响已拿到的。 */
+export async function fetchUpstream({ fetchImpl = fetch, pages = 3, limit = 100, now = Date.now(), attempts = 3, waitMs = 600 } = {}) {
+  const items = []
+  const errors = []
+  for (let page = 0; page < pages; page += 1) {
+    const url = UPSTREAM_BASE + '?limit=' + limit + '&offset=' + (page * limit) + '&sort=newest'
+    try {
+      let text = ''
+      let lastError = null
+      // 这个接口也会偶发冷启动超时（和 Epic 一样的毛病），所以每页重试几次再放弃。
+      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        try {
+          text = await getText(url, { fetchImpl, accept: 'application/json', timeoutMs: 20000 })
+          lastError = null
+          break
+        } catch (error) {
+          lastError = error
+          if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, waitMs))
+        }
+      }
+      if (lastError) throw lastError
+      let json
+      try {
+        json = JSON.parse(text)
+      } catch {
+        throw new Error('返回的不是合法 JSON')
+      }
+      items.push(...parseUpstreamItems(json, { now }))
+      if (!Array.isArray(json?.items) || json.items.length < limit) break
+    } catch (error) {
+      errors.push('资源雷达第 ' + (page + 1) + ' 页：' + (error?.message || error))
+      break
+    }
+  }
+  return { items, errors }
+}
+
+/**
+ * 主题分类（「这是什么」）—— 与价格分类（「多少钱」）分开：
+ * 一条「B 站大会员免费领」既是「免费」也是「影音会员」，两个维度不该挤在同一排。
+ */
+export const TOPICS = [
+  { id: 'media', name: '影音会员' },
+  { id: 'ai', name: 'AI 额度' },
+  { id: 'cloud', name: '云服务' },
+  { id: 'vps', name: 'VPS/主机' },
+  { id: 'web', name: '域名/建站' },
+  { id: 'game', name: '游戏' },
+  { id: 'deal', name: '实物/拼车' },
+  { id: 'edu', name: '学习/教育' },
+  { id: 'other', name: '其他' }
+]
+
+const TOPIC_RULES = [
+  ['game', /(游戏|Steam|Epic|PSN|Switch|Xbox)/i],
+  ['media', /(会员|影视|电影|剧集|Netflix|Spotify|B站|大会员|爱奇艺|优酷|腾讯视频|音乐|VIP)/i],
+  ['ai', /(GPT|Claude|Gemini|OpenAI|API|token|额度|大模型|\bAI\b)/i],
+  ['cloud', /(云服务器|云盘|对象存储|CDN|数据库|函数计算|阿里云|腾讯云|华为云|AWS|Azure|Oracle|甲骨文)/i],
+  ['vps', /(VPS|主机|服务器|独立IP|CN2|中转|节点|机场|流量)/i],
+  ['web', /(域名|建站|SSL|证书|WordPress|图床|备案|解析)/i],
+  ['deal', /(拼车|合租|实物|手办|耳机|显示器|充电器)/],
+  ['edu', /(课程|教程|学习|考试|教育|网课)/]
+]
+
+/** 自有来源没有 topic 字段：按标题/摘要推断一个，前端就能用同一套筛选。 */
+export function topicOf(text, category) {
+  if (category === 'game') return 'game'
+  const t = String(text || '')
+  for (const [topic, pattern] of TOPIC_RULES) {
+    if (pattern.test(t)) return topic
+  }
+  return 'other'
 }

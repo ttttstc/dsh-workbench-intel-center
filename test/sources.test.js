@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { filterRadar } from '../src/shared/core.js'
 import {
+  parseUpstreamItems,
+  topicOf,
   buildRadar,
   classify,
   fetchAppinn,
@@ -195,10 +198,10 @@ test('雷达：游戏条目绕开关键词表，过期条目自动下版', async
   assert.ok(items[0].score >= 70, "限免游戏应排在前面")
 })
 
-test('来源清单：七个源，NodeSeek 已改为可直连', async () => {
+test('来源清单：八个源，含资源雷达；NodeSeek 可直连', async () => {
   const { SOURCES } = await import("../dsh/sources.js")
   const ids = SOURCES.map((source) => source.id)
-  assert.deepEqual(ids, ["linuxdo", "nodeseek", "appinn", "ghxi", "iplaysoft", "v2ex", "epic"])
+  assert.deepEqual(ids, ["linuxdo", "nodeseek", "appinn", "ghxi", "iplaysoft", "v2ex", "epic", "zcl"])
   assert.equal(SOURCES.find((source) => source.id === "nodeseek").kind, "both")
   assert.equal(SOURCES.find((source) => source.id === "ghxi").kind, "direct")
 })
@@ -271,4 +274,40 @@ test('雷达收录：已结束的条目不再占位', () => {
   assert.equal(built.length, 1, '已开奖的被丢掉')
   assert.equal(built[0].url, 'https://a.com/1')
   assert.ok(built[0].reasons.length > 0, '收录时带上理由，界面才能解释')
+})
+
+test('资源雷达：只收 freebie/deal，资讯分类与噪声被挡在门外', () => {
+  const json = {
+    items: [
+      { url: 'https://a.com/1', title: '免费领 7 天大会员', category: 'media', kind: 'freebie', obtain: 'free', is_free: 1, summary: '限时', published_at: '11/15/2026 10:00:00', status: 'active' },
+      { url: 'https://a.com/2', title: 'VPS 特价款 $11/年', category: 'vps', kind: 'deal', obtain: 'paid', published_at: '11/15/2026 10:00:00', status: 'active' },
+      { url: 'https://a.com/3', title: '爆火狐獴的可爱背面', category: 'other', kind: 'info', obtain: 'free', published_at: '11/15/2026 10:00:00', status: 'active' },
+      { url: 'https://a.com/4', title: '特斯拉首台无方向盘的车', category: 'tech', kind: 'info', obtain: 'free', published_at: '11/15/2026 10:00:00', status: 'active' },
+      { url: 'https://a.com/5', title: '已过期的大会员', category: 'media', kind: 'freebie', obtain: 'free', expires_at: '01/01/2020 00:00:00', published_at: '11/15/2026 10:00:00', status: 'active' },
+      { url: 'https://a.com/6', title: '已失效的帖子', category: 'cloud', kind: 'freebie', obtain: 'free', status: 'inactive' }
+    ]
+  }
+  const items = parseUpstreamItems(json, { now: Date.parse('2026-11-15T00:00:00Z') })
+  assert.deepEqual(items.map((item) => item.url), ['https://a.com/1', 'https://a.com/2'])
+  assert.equal(items[0].topic, 'media')
+  assert.equal(items[0].hints.free, true)
+  assert.equal(items[1].topic, 'vps')
+  assert.equal(items[1].hints.discount, true, 'paid 记为特价而不是免费')
+})
+
+test('主题分类：自有来源也能推断出主题，并按主题筛选', () => {
+  assert.equal(topicOf('B 站大会员免费领 7 天'), 'media')
+  assert.equal(topicOf('阿里云百炼 token 额度免费领'), 'ai')
+  assert.equal(topicOf('腾讯云轻量服务器 2 核 4G'), 'cloud')
+  assert.equal(topicOf('CN2 中转 VPS 年付 11 刀'), 'vps')
+  assert.equal(topicOf('免费域名 + SSL 证书'), 'web')
+  assert.equal(topicOf('Epic 免费游戏'), 'game')
+
+  const items = [
+    { id: '1', title: 'B 站大会员', topic: 'media', category: 'free', source: 'zcl' },
+    { id: '2', title: '阿里云额度', topic: 'ai', category: 'free', source: 'zcl' }
+  ]
+  assert.deepEqual(filterRadar(items, { topic: 'media' }).map((item) => item.id), ['1'])
+  assert.deepEqual(filterRadar(items, { topic: 'ai', category: 'free' }).map((item) => item.id), ['2'])
+  assert.equal(filterRadar(items, { topic: 'vps' }).length, 0)
 })

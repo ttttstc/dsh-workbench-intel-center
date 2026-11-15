@@ -184,6 +184,8 @@ function normalizeFeedItem(raw, index, prefix) {
     // 「凭什么这个分」：每个加减分项都带中文理由，界面直接展示，用户可以自己复核。
     // X 条目的来源：搜索命中还是固定账号的时间线
     via: text(raw.via, 20) || '',
+    // 主题分类（影音会员 / AI 额度 / 云服务 …），与价格分类是两个维度
+    topic: text(raw.topic, 20) || '',
     tier: text(raw.tier, 20) || '',
     reasons: Array.isArray(raw.reasons)
       ? raw.reasons.slice(0, 5).map((reason) => ({
