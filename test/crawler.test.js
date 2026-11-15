@@ -47,6 +47,7 @@ test('多关键词抓取：去重、按点赞降序、截断到 limit', async ()
   const { items, scanned, errors } = await crawlX({
     cdp,
     keywords: DEFAULT_KEYWORDS.slice(0, 2),
+    accounts: [],
     limit: 3,
     scrolls: 3,
     pageWaitMs: 0,
@@ -78,6 +79,7 @@ test('单个关键词失败不中断整体，错误被收集', async () => {
   const { items, errors } = await crawlX({
     cdp,
     keywords: ['坏', '好'],
+    accounts: [],
     scrolls: 1,
     pageWaitMs: 0,
     scrollWaitMs: 0
@@ -101,7 +103,7 @@ test('没有标题或链接的条目被丢弃', async () => {
     async scrollBottom() {},
     async close() {}
   }
-  const { items } = await crawlX({ cdp, keywords: ['羊毛'], scrolls: 1, pageWaitMs: 0, scrollWaitMs: 0 })
+  const { items } = await crawlX({ cdp, keywords: ['羊毛'], accounts: [], scrolls: 1, pageWaitMs: 0, scrollWaitMs: 0 })
   assert.equal(items.length, 1)
   assert.equal(items[0].title, '正常')
 })
@@ -145,4 +147,35 @@ test('浏览器通道：一个站失败时另一个仍返回', async () => {
   assert.match(errors[0], /linux.do/)
   assert.ok(items.length >= 1)
   assert.ok(items.every((i) => i.source === 'nodeseek'))
+})
+
+test('固定账号的时间线也会被抓，并标记 via: account', async () => {
+  const opened = []
+  const cdp = {
+    async newTab(url) {
+      opened.push(url)
+      return 'tab'
+    },
+    async eval() {
+      return JSON.stringify([
+        { title: '来自关注账号的羊毛', url: 'https://x.com/Lovislexus/status/11', likes: 5 }
+      ])
+    },
+    async scrollBottom() {},
+    async close() {}
+  }
+  const { items, errors } = await crawlX({
+    cdp,
+    keywords: ['羊毛'],
+    accounts: ['Lovislexus', 'ShuaiMaLong'],
+    scrolls: 1,
+    accountScrolls: 1,
+    pageWaitMs: 0,
+    scrollWaitMs: 0
+  })
+  assert.deepEqual(errors, [])
+  assert.ok(opened.includes('https://x.com/Lovislexus'), '要打开 Lovislexus 的时间线')
+  assert.ok(opened.includes('https://x.com/ShuaiMaLong'), '要打开 ShuaiMaLong 的时间线')
+  assert.equal(items.length, 1)
+  assert.equal(items[0].via, 'account', '账号时间线来的条目要能区分')
 })

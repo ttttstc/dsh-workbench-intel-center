@@ -434,32 +434,140 @@ export function hasConcreteEvidence(text) {
 }
 
 /**
- * 羊毛评分（0-100）：
- * 基础分按类别（免费/限免 > 折扣 > 一般），再按「有具体数字」「时效」「是否要绑卡/实名/返利」加减。
+ * 「真实能薅到」的判断：把一件事拆成五个可解释的信号，而不是一个笼统印象分。
+ *
+ * 1. 是不是真免费 —— 免费/白嫖/0 元/限免
+ * 2. 值多少      —— 有没有具体数字（元/GB/月/积分）
+ * 3. 怎么领      —— 有没有明确的领取动作或路径（领取/注册/链接/口令）
+ * 4. 有什么代价  —— 绑卡/实名/新用户/首充/押金/邀请 N 人
+ * 5. 会不会白忙  —— 抽奖、已开奖/已结束/名额已满；以及纯讨论/求助
+ *
+ * 每个加减都进 reasons，界面上能直接告诉用户「凭什么这个分」。
  */
+export const WOOL_SIGNALS = {
+  free: /(免费|白送|白嫖|0\s*元|零元|白给|赠送|限免|免单|免费领|送\s*\d|送\s*(会员|额度|流量|时长)|领\s*\d+\s*(元|G|个月|天))/, 
+  value: /([¥￥$]\s*\d|\d+(\.\d+)?\s*(元|块|美元|刀|GB|G\b|TB|MB|个月|月|年|天|次|积分|额度|折))/i,
+  discount: /(优惠|折扣|立减|券|特价|秒杀|补贴|满减)/,
+  action: /(领取|领一下|领到|开领|去领|注册|签到|申请|兑换|下单|直达|点击|链接|评论区|口令|扫码|邀请码)/,
+  condition: /(绑卡|绑定信用卡|实名|认证|新用户|仅限新|首充|充值|押金|预付|需购买|会员价|开会员|邀请\s*\d+\s*人|助力|砍一刀)/,
+  lottery: /(抽奖|抽\s*\d+\s*(名|位|个|份)|随机|概率|中奖|开奖|锦鲤|摇号)/,
+  closed: /(已开奖|已结束|已抢完|名额已满|已截止|已过期|活动结束|已领完)/,
+  discussion: /(求推荐|怎么领|有没有|求助|请问|问一下|聊聊|讨论|如何看待)/,
+  aff: /(返利|aff|affiliate|推广|小黄车|带货|分销|返佣)/i,
+  urgency: /(限时|今日|今天|最后一天|仅剩|倒计时|还剩)/
+}
+
+/** 来源可信度：福利版块 > 技术社区 > 软件站（软件站的帖子多是发版信息）。 */
+const SOURCE_TRUST = { linuxdo: 10, nodeseek: 8, epic: 8, v2ex: 6, x: 5, appinn: 3, ghxi: 2, iplaysoft: 2 }
+
 export function scoreWool(item, { now = Date.now() } = {}) {
-  const text = (item.title || '') + ' ' + (item.excerpt || '')
-  const base = { limited: 62, game: 66, free: 58, cheap: 40, general: 24 }[item.category] ?? 24
-  let score = base
-  if (hasConcreteEvidence(text)) score += 18
-  if (/(限时|限免)/.test(text)) score += 6
-  const verdictInfo = verifyFree(text)
-  if (verdictInfo.verdict === 'free') score += 10
-  else if (verdictInfo.verdict === 'conditional') score -= 6
-  else if (verdictInfo.verdict === 'discount') score += 2
+  const text = `${item.title || ''} ${item.excerpt || ''}`
+  const hit = (pattern) => pattern.test(text)
+  const reasons = []
+  const add = (code, label, delta) => {
+    if (delta) reasons.push({ code, label, delta })
+  }
+
+  const isFree = hit(WOOL_SIGNALS.free)
+  const hasValue = hit(WOOL_SIGNALS.value)
+  const hasAction = hit(WOOL_SIGNALS.action)
+  const hasCondition = hit(WOOL_SIGNALS.condition)
+  const isLottery = hit(WOOL_SIGNALS.lottery)
+  const isClosed = hit(WOOL_SIGNALS.closed)
+  const isTalk = hit(WOOL_SIGNALS.discussion)
+  const isAff = hit(WOOL_SIGNALS.aff)
+  const isDiscount = hit(WOOL_SIGNALS.discount)
+
+  let score = 18
+  if (isFree) {
+    score += 32
+    add('free', '写了免费 / 限免', 32)
+  } else if (isDiscount) {
+    score += 6
+    add('discount', '只是优惠，不是免费', 6)
+  }
+  if (hasValue) {
+    score += 16
+    add('value', '有具体数字（钱 / 额度 / 时长）', 16)
+  }
+  if (hasAction) {
+    score += 14
+    add('action', '领取方式写清楚了', 14)
+  }
+  // X 上来自「固定账号时间线」的条目比泛关键词搜索更可信：账号是有人替你筛过的。
+  const trust = (SOURCE_TRUST[item.source] || 0) + (item.source === 'x' && item.via === 'account' ? 4 : 0)
+  if (trust) {
+    score += trust
+    add('source', '来自羊毛密度高的来源', trust)
+  }
+
   const age = now - (Date.parse(item.createdAt) || now)
-  if (age <= 24 * 3600 * 1000) score += 10
-  else if (age <= 3 * 24 * 3600 * 1000) score += 5
-  // 有明确截止时间的（Epic 限免）：越临近优先，过了就下版，所以「还剩几天」本身就是价值。
+  if (age <= 24 * 3600 * 1000) {
+    score += 10
+    add('fresh', '24 小时内发布', 10)
+  } else if (age <= 3 * 24 * 3600 * 1000) {
+    score += 6
+    add('fresh', '3 天内发布', 6)
+  } else if (age <= 7 * 24 * 3600 * 1000) {
+    score += 3
+  }
+
   const left = Date.parse(item.expiresAt) - now
   if (Number.isFinite(left) && left > 0) {
-    if (left <= 2 * 24 * 3600 * 1000) score += 12
-    else if (left <= 5 * 24 * 3600 * 1000) score += 6
+    if (left <= 2 * 24 * 3600 * 1000) {
+      score += 6
+      add('deadline', '两天内截止，得赶紧', 6)
+    } else if (left <= 5 * 24 * 3600 * 1000) {
+      score += 3
+      add('deadline', '五天内截止', 3)
+    }
   }
-  if (item.source === 'appinn') score += 4
-  if (item.source === 'v2ex') score += 3
+  if (hit(WOOL_SIGNALS.urgency)) {
+    score += 4
+    add('urgency', '限时 / 今天', 4)
+  }
+
+  if (hasCondition) {
+    score -= 22
+    add('condition', '有门槛：绑卡 / 实名 / 新用户 / 首充 / 邀请', -22)
+  }
+  if (isAff) {
+    score -= 18
+    add('aff', '带返利 / 推广', -18)
+  }
+  if (isLottery) {
+    score -= 26
+    add('lottery', '抽奖性质，中不中看运气', -26)
+  }
+  if (isTalk) {
+    score -= 28
+    add('talk', '更像讨论 / 求助，不是福利', -28)
+  }
+  if (isClosed) {
+    score -= 45
+    add('closed', '活动已结束 / 已开奖', -45)
+  }
+
   score = Math.max(1, Math.min(100, Math.round(score)))
-  return { score, verdict: verdictInfo.verdict, verified: verdictInfo.verdict === 'free' }
+
+  // 结论按「能不能真拿到」排序，而不是「像不像羊毛」。
+  let tier = 'unknown'
+  if (isClosed) tier = 'closed'
+  else if (isTalk && !isFree) tier = 'talk'
+  else if (isLottery) tier = 'lottery'
+  else if (isFree && hasCondition) tier = 'conditional'
+  else if (isFree) tier = 'claimable'
+  else if (isAff || isDiscount) tier = 'discount'
+
+  reasons.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+  return {
+    score,
+    tier,
+    // verdict 沿用旧词表，界面与历史数据都还能对上
+    verdict: tier === 'claimable' ? 'free' : tier,
+    verified: tier === 'claimable',
+    reasons: reasons.slice(0, 5)
+  }
 }
 
 
@@ -486,10 +594,14 @@ export function buildRadar(rawItems, { now = Date.now(), days = MAX_AGE_DAYS, li
     const category = rawCat === 'other' ? 'general' : rawCat
     if (byUrl.has(raw.url)) continue
     const graded = scoreWool({ ...raw, category }, { now })
+    // 已经结束 / 已开奖的：留在库里只会把真正能领的挤下去，直接不进榜。
+    if (graded.tier === 'closed') continue
     byUrl.set(raw.url, {
       ...raw,
       category,
       score: graded.score,
+      tier: graded.tier,
+      reasons: graded.reasons,
       verdict: graded.verdict,
       verified: graded.verified,
       id: raw.url.replace(/[^\w]/g, '').slice(-48)
