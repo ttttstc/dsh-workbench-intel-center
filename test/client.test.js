@@ -142,15 +142,19 @@ test('有数据时渲染完整布局：标签栏、三个榜单与页脚都能�
   assert.ok(!text.includes('intel-err'), '没有错误时不该渲染错误条')
 })
 
-test('渲染：多了「游戏限免」页，游戏条目只出现在那一页', () => {
+test('渲染：主题与页面平铺成一行，只有一个「全部」', () => {
   const definition = loadArtifact()
   const react = makeReact()
   const exports = definition.factory(() => react)
-  const tree = exports.Panel({ service: {}, conversation: null })
-  assert.match(JSON.stringify(tree), /游戏限免/)
+  const text = JSON.stringify(exports.Panel({ service: {}, conversation: null }))
+  assert.match(text, /全部/, '雷达页的入口叫「全部」')
+  assert.equal((text.match(/全部/g) || []).length, 1, '只允许一个「全部」')
+  assert.match(text, /X 羊毛/, 'X 页面保留')
+  assert.match(text, /Token 羊毛/, 'Token 页面保留')
+  assert.equal(text.includes('全部来源'), false, '来源分段已经去掉')
 })
 
-test('渲染：雷达卡片带「AI 帮领」按钮，游戏页不提供代领', () => {
+test('渲染：雷达卡片带「AI 帮领」按钮与理由小字', () => {
   const definition = loadArtifact()
   const react = makeReact({
     firstState: {
@@ -176,5 +180,5 @@ test('渲染：雷达卡片带「AI 帮领」按钮，游戏页不提供代领',
   const text = JSON.stringify(exports.Panel({ service: {}, conversation: null }))
   assert.match(text, /AI 帮领/, '每张羊毛卡片都要有生成领取指令的入口')
   assert.match(text, /去原帖/, '卡片要有原文链接')
-  assert.match(text, /游戏限免/, '游戏单独一页')
+  assert.match(text, /全部/, '平铺后的入口')
 })
