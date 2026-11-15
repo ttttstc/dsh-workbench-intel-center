@@ -48,7 +48,7 @@ export const CATEGORIES = [
 
 export const MAX_AGE_DAYS = 7
 /** 雷达在库上限：一处定义，抓取合并、接口状态与界面文案共用。 */
-export const MAX_RADAR_ITEMS = 500
+export const MAX_RADAR_ITEMS = 1200
 
 const NOISE = ['招聘', '求职', '面试', '房源', '租房', '征友']
 
@@ -589,6 +589,16 @@ export function scoreWool(item, { now = Date.now() } = {}) {
  * 收录与排序：只留近 7 天、命中关键词、非噪声的条目；
  * 先按 限免 > 免费 > 低价，同标签内按发布时间倒序。
  */
+/** URL → 稳定短 id（FNV-1a，36 进制）。 */
+function fnv1a(text) {
+  let hash = 2166136261
+  const value = String(text || '')
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
 export function buildRadar(rawItems, { now = Date.now(), days = MAX_AGE_DAYS, limit = MAX_RADAR_ITEMS } = {}) {
   const byUrl = new Map()
   for (const raw of rawItems) {
@@ -621,7 +631,9 @@ export function buildRadar(rawItems, { now = Date.now(), days = MAX_AGE_DAYS, li
       reasons: graded.reasons,
       verdict: graded.verdict,
       verified: graded.verified,
-      id: raw.url.replace(/[^\w]/g, '').slice(-48)
+      // 条目身份必须稳定且唯一：以前用「URL 去掉非字母数字后取末 48 位」，
+      // 中文路径会被整段剥掉，不同条目撞成同一个 id，然后在入库规范化时被当成重复丢掉。
+      id: 'r-' + fnv1a(raw.url)
     })
   }
   return [...byUrl.values()]
@@ -716,18 +728,34 @@ export function parseUpstreamItems(json, { now = Date.now() } = {}) {
 }
 
 /** 抓 N 页（默认 3 页 × 100 条）；某一页失败不影响已拿到的。 */
-export async function fetchUpstream({ fetchImpl = fetch, pages = 3, limit = 100, now = Date.now(), attempts = 3, waitMs = 600 } = {}) {
-  const items = []
+/**
+ * 抓上游的「羊毛部分」。
+ *
+ * 关键：接口支持按 kind 过滤，所以要的是 freebie（免费领取）+ deal（特价线报），
+ * 而不是把 6000 多条（含大量资讯）全翻一遍。实测总量：freebie 约 686、deal 约 1320。
+ * 资讯（info / news）与噪声（noise）一条都不取。
+ */
+export async function fetchUpstream({
+  fetchImpl = fetch,
+  kinds = ['freebie', 'deal'],
+  perPage = 200,
+  maxPages = 8,
+  now = Date.now(),
+  attempts = 3,
+  waitMs = 500
+} = {}) {
+  const seen = new Map()
   const errors = []
-  for (let page = 0; page < pages; page += 1) {
-    const url = UPSTREAM_BASE + '?limit=' + limit + '&offset=' + (page * limit) + '&sort=newest'
-    try {
-      let text = ''
+  for (const kind of kinds) {
+    for (let page = 0; page < maxPages; page += 1) {
+      const url = UPSTREAM_BASE + '?limit=' + perPage + '&offset=' + (page * perPage) +
+        '&kind=' + kind + '&sort=newest'
+      let json = null
       let lastError = null
-      // 这个接口也会偶发冷启动超时（和 Epic 一样的毛病），所以每页重试几次再放弃。
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
         try {
-          text = await getText(url, { fetchImpl, accept: 'application/json', timeoutMs: 20000 })
+          const text = await getText(url, { fetchImpl, accept: 'application/json', timeoutMs: 20000 })
+          json = JSON.parse(text)
           lastError = null
           break
         } catch (error) {
@@ -735,21 +763,24 @@ export async function fetchUpstream({ fetchImpl = fetch, pages = 3, limit = 100,
           if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, waitMs))
         }
       }
-      if (lastError) throw lastError
-      let json
-      try {
-        json = JSON.parse(text)
-      } catch {
-        throw new Error('返回的不是合法 JSON')
+      if (lastError) {
+        errors.push('资源雷达 ' + kind + ' 第 ' + (page + 1) + ' 页：' + (lastError?.message || lastError))
+        break
       }
-      items.push(...parseUpstreamItems(json, { now }))
-      if (!Array.isArray(json?.items) || json.items.length < limit) break
-    } catch (error) {
-      errors.push('资源雷达第 ' + (page + 1) + ' 页：' + (error?.message || error))
-      break
+      const rows = Array.isArray(json?.items) ? json.items : []
+      for (const item of parseUpstreamItems(json, { now })) {
+        if (!seen.has(item.url)) seen.set(item.url, item)
+      }
+      // 本页不满说明已经到底；本页全部早于保留窗口也就不用再翻
+      if (rows.length < perPage) break
+      const oldest = rows.reduce((min, row) => {
+        const t = Date.parse(row.published_at) || Date.parse(row.first_seen_at) || now
+        return Math.min(min, t)
+      }, now)
+      if (now - oldest > MAX_AGE_DAYS * 24 * 3600 * 1000) break
     }
   }
-  return { items, errors }
+  return { items: [...seen.values()], errors }
 }
 
 /**
