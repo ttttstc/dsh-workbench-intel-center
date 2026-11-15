@@ -300,7 +300,7 @@ test('主题分类：自有来源也能推断出主题，并按主题筛选', ()
   assert.equal(topicOf('阿里云百炼 token 额度免费领'), 'ai')
   assert.equal(topicOf('腾讯云轻量服务器 2 核 4G'), 'cloud')
   assert.equal(topicOf('CN2 中转 VPS 年付 11 刀'), 'vps')
-  assert.equal(topicOf('免费域名 + SSL 证书'), 'web')
+  assert.equal(topicOf('免费域名 + SSL 证书'), 'domain')
   assert.equal(topicOf('Epic 免费游戏'), 'game')
 
   const items = [

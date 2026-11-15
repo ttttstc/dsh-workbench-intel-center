@@ -327,16 +327,24 @@ export const RADAR_TOPICS = [
   { id: 'ai', name: 'AI 额度' },
   { id: 'cloud', name: '云服务' },
   { id: 'vps', name: 'VPS/主机' },
-  { id: 'web', name: '域名/建站' },
+  { id: 'domain', name: '域名/建站' },
+  { id: 'opensource', name: '开源软件' },
+  { id: 'software', name: '软件授权' },
+  { id: 'dev', name: '开发/工程' },
+  { id: 'design', name: '设计/素材' },
+  { id: 'security', name: '安全/网络' },
+  { id: 'hardware', name: '硬件/数码' },
   { id: 'game', name: '游戏' },
-  { id: 'deal', name: '实物/拼车' },
-  { id: 'edu', name: '学习/教育' },
-  { id: 'other', name: '其他' }
-]
+  { id: 'carpool', name: '拼车/合租' },
+  { id: 'trade', name: '二手/交易' },
+  { id: 'goods', name: '实物/优惠' },
+  { id: 'invite', name: '邀请码' },
+  { id: 'edu', name: '教育' },
+  { id: 'other', name: '其它' }]
 
 export const RADAR_TOPIC_LABEL = Object.fromEntries(RADAR_TOPICS.map((item) => [item.id, item.name]))
 
-export const API_VERSION = 7
+export const API_VERSION = 8
 
 /**
  * 写回规则：把「谁能改哪些字段」写给 Agent 看。

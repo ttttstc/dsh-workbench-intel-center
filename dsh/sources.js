@@ -648,20 +648,12 @@ export const UPSTREAM_BASE = 'https://radar.zichuanlan.top/api/items'
  * 只收「能薅」的类目：world / news / headline / tech / finance / stock / hardware / car
  * 是资讯与评测，收进来只会稀释雷达。
  */
+/** 直接采用资源雷达的分类口径（只保留「能薅」的 18 类；时政/财经/股票/科技/资讯不收）。 */
 export const UPSTREAM_TOPIC = {
-  media: 'media',
-  ai: 'ai',
-  cloud: 'cloud',
-  vps: 'vps',
-  domain: 'web',
-  dev: 'web',
-  software: 'web',
-  game: 'game',
-  goods: 'deal',
-  trade: 'deal',
-  carpool: 'deal',
-  edu: 'edu',
-  other: 'other'
+  ai: 'ai', cloud: 'cloud', vps: 'vps', domain: 'domain', opensource: 'opensource',
+  software: 'software', dev: 'dev', design: 'design', security: 'security',
+  hardware: 'hardware', media: 'media', game: 'game', carpool: 'carpool',
+  trade: 'trade', goods: 'goods', invite: 'invite', edu: 'edu', other: 'other'
 }
 
 /** obtain（它的 AI 可领取判断）→ 我们的 hints：直接用它的结论，比关键词准。 */
@@ -713,6 +705,9 @@ export function parseUpstreamItems(json, { now = Date.now() } = {}) {
       createdAt: new Date(created).toISOString(),
       expiresAt: Number.isFinite(expires) ? new Date(expires).toISOString() : '',
       topic,
+      topic,
+      // 游戏条目继续走「游戏限免」页：那边按 category === 'game' 分流
+      category: topic === 'game' ? 'game' : undefined,
       hints,
       heat: 0
     })
@@ -766,11 +761,20 @@ export const TOPICS = [
   { id: 'ai', name: 'AI 额度' },
   { id: 'cloud', name: '云服务' },
   { id: 'vps', name: 'VPS/主机' },
-  { id: 'web', name: '域名/建站' },
+  { id: 'domain', name: '域名/建站' },
+  { id: 'opensource', name: '开源软件' },
+  { id: 'software', name: '软件授权' },
+  { id: 'dev', name: '开发/工程' },
+  { id: 'design', name: '设计/素材' },
+  { id: 'security', name: '安全/网络' },
+  { id: 'hardware', name: '硬件/数码' },
   { id: 'game', name: '游戏' },
-  { id: 'deal', name: '实物/拼车' },
-  { id: 'edu', name: '学习/教育' },
-  { id: 'other', name: '其他' }
+  { id: 'carpool', name: '拼车/合租' },
+  { id: 'trade', name: '二手/交易' },
+  { id: 'goods', name: '实物/优惠' },
+  { id: 'invite', name: '邀请码' },
+  { id: 'edu', name: '教育' },
+  { id: 'other', name: '其它' }
 ]
 
 const TOPIC_RULES = [
@@ -779,8 +783,13 @@ const TOPIC_RULES = [
   ['ai', /(GPT|Claude|Gemini|OpenAI|API|token|额度|大模型|\bAI\b)/i],
   ['cloud', /(云服务器|云盘|对象存储|CDN|数据库|函数计算|阿里云|腾讯云|华为云|AWS|Azure|Oracle|甲骨文)/i],
   ['vps', /(VPS|主机|服务器|独立IP|CN2|中转|节点|机场|流量)/i],
-  ['web', /(域名|建站|SSL|证书|WordPress|图床|备案|解析)/i],
-  ['deal', /(拼车|合租|实物|手办|耳机|显示器|充电器)/],
+  ['domain', /(域名|建站|SSL|证书|WordPress|图床|备案|解析)/i],
+  ['invite', /(邀请码|邀请注册|内测码|激活码)/],
+  ['software', /(授权|License|正版|订阅|Office|IDE)/],
+  ['hardware', /(硬件|显卡|显示器|耳机|键盘|路由|NAS)/i],
+  ['carpool', /(拼车|合租|共享)/],
+  ['trade', /(闲置|转让|求购|二手)/],
+  ['goods', /(优惠|满减|券|特价|秒杀)/],
   ['edu', /(课程|教程|学习|考试|教育|网课)/]
 ]
 

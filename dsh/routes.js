@@ -13,7 +13,7 @@ import { ValidationError, mergeState, normalizeState } from './model.js'
 import { WOOL_ORIGIN, WOOL_URL, createWoolFetcher, prepareEmbedHtml } from './wool.js'
 import { BROWSER_SOURCES, DEFAULT_KEYWORDS, crawlBrowserFeeds, crawlBrowserSources, crawlX } from './crawler.js'
 import { RUN_HOURS, createTickScheduler, nextRunAt, normalizeSettings } from './schedule.js'
-import { MAX_AGE_DAYS, MAX_RADAR_ITEMS, SOURCES, buildRadar, collectServerSources } from './sources.js'
+import { MAX_AGE_DAYS, MAX_RADAR_ITEMS, SOURCES, buildRadar, collectServerSources, fetchUpstream } from './sources.js'
 import { createJob, lastRunOf } from './jobs.js'
 import { API_VERSION, X_TOP_LIMIT, todayISO } from '../src/shared/core.js'
 
@@ -66,6 +66,7 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center', de
   const fetchServerSources = deps.collectServerSources || collectServerSources
   const fetchBrowserFeeds = deps.crawlBrowserFeeds || crawlBrowserFeeds
   const fetchBrowserSources = deps.crawlBrowserSources || crawlBrowserSources
+  const fetchUpstreamSources = deps.collectUpstreamSources || ((options) => fetchUpstream(options))
   const fetchX = deps.crawlX || crawlX
   const jobTimeoutMs = Number.isFinite(deps.jobTimeoutMs) ? deps.jobTimeoutMs : 300000
   const noStore = { 'cache-control': 'no-store' }
@@ -103,19 +104,32 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center', de
 
   async function runRadar(reason) {
     const startedAt = now().toISOString()
-    // 先跑直连源。哪个源「0 条且有错」就改走浏览器通道——不再靠错误文案里有没有「LINUX DO」
-    // 来判断：403 / Cloudflare / 与系统代理不同的出口 IP，都会落到这条路径上。
-    const server = await fetchServerSources()
-    const perSource = server.perSource || []
-    const blocked = perSource
-      .filter((item) => item.count === 0 && item.errors.length && BROWSER_SOURCES[item.id])
-      .map((item) => item.id)
-    const browser = blocked.length
-      ? await fetchBrowserSources({ sources: blocked, log: () => {} })
-        .catch((error) => ({ items: [], errors: [String(error?.message || error)] }))
-      : { items: [], errors: [] }
-    const all = [...(server.items || []), ...(browser.items || [])]
-    const errors = [...(server.errors || []), ...(browser.errors || [])]
+    // 优先走上游聚合（资源雷达）：它已经做过 AI 分类与去重，一次请求覆盖全部分类。
+    // 直连源（LINUX DO / NodeSeek / V2EX / 软件站 / Epic）降级为兜底：上游拿不到内容时才启用。
+    const upstream = await fetchUpstreamSources({ now: Date.now() })
+      .catch((error) => ({ items: [], errors: [String(error?.message || error)] }))
+    let all = Array.isArray(upstream.items) ? [...upstream.items] : []
+    const errors = [...(upstream.errors || [])]
+    let mode = 'upstream'
+    let serverCount = 0
+    let browserCount = 0
+    let browserSources = []
+    if (all.length === 0) {
+      mode = 'fallback'
+      const server = await fetchServerSources()
+      const perSource = server.perSource || []
+      browserSources = perSource
+        .filter((item) => item.count === 0 && item.errors.length && BROWSER_SOURCES[item.id])
+        .map((item) => item.id)
+      const browser = browserSources.length
+        ? await fetchBrowserSources({ sources: browserSources, log: () => {} })
+          .catch((error) => ({ items: [], errors: [String(error?.message || error)] }))
+        : { items: [], errors: [] }
+      serverCount = (server.items || []).length
+      browserCount = (browser.items || []).length
+      all = [...(server.items || []), ...(browser.items || [])]
+      errors.push(...(server.errors || []), ...(browser.errors || []))
+    }
     const merged = await mergeIntoRadar(all, startedAt)
     const bySource = {}
     for (const item of all) {
@@ -124,12 +138,13 @@ export function apply(ctx, config, pluginName = 'dsh-workbench-intel-center', de
     }
     const result = {
       ok: true,
+      mode,
       count: merged.length,
       fresh: all.length,
-      serverCount: (server.items || []).length,
-      browserCount: (browser.items || []).length,
-      browserSkipped: blocked.length === 0,
-      browserSources: blocked,
+      serverCount,
+      browserCount,
+      browserSkipped: browserSources.length === 0,
+      browserSources,
       bySource,
       errors,
       reason

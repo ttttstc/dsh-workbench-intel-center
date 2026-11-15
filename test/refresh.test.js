@@ -12,6 +12,9 @@ import { X_TOP_LIMIT } from '../src/shared/core.js'
  * /radar/refresh 里一个未定义的 request 就一直没人发现。
  */
 async function mount({ deps = {}, seedState } = {}) {
+  // 上游默认返回空：既有用例走的都是「直连兜底」路径；
+  // 想测上游优先的用例自己覆盖 collectUpstreamSources。
+  deps = { collectUpstreamSources: async () => ({ items: [], errors: [] }), ...deps }
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'intel-center-refresh-'))
   if (seedState) await fs.writeFile(path.join(root, 'state.json'), JSON.stringify(seedState), 'utf8')
   const routes = new Map()
@@ -304,4 +307,45 @@ test('磁盘上有坏卡片时整份数据仍可读，坏的那张被跳过', as
   const state = await call('/api/intel-center/state')
   assert.equal(state.status, 200, '一张坏卡片不该让整个工作台打不开')
   assert.deepEqual(state.body.state.cards.map((card) => card.id), ['good'])
+})
+
+test('上游优先：资源雷达有数据就不走直连源', async () => {
+  let directCalls = 0
+  const { call, api } = await mount({
+    deps: {
+      collectUpstreamSources: async () => ({
+        items: [{ source: 'zcl', topic: 'media', title: '上游带来的影音会员羊毛', url: 'https://example.com/up', createdAt: new Date().toISOString(), excerpt: '' }],
+        errors: []
+      }),
+      collectServerSources: async () => {
+        directCalls += 1
+        return { items: [], errors: [], perSource: [] }
+      }
+    }
+  })
+  await call('/api/intel-center/radar/refresh', { method: 'POST', body: '{}' })
+  await waitJob(api.radarJob)
+
+  assert.equal(directCalls, 0, '上游成功时不该再抓直连源')
+  const status = await call('/api/intel-center/radar/status')
+  assert.equal(status.body.job.result.mode, 'upstream')
+  assert.equal(status.body.job.result.bySource.zcl, 1)
+})
+
+test('上游为空时降级到直连源', async () => {
+  const { call, api } = await mount({
+    deps: {
+      collectServerSources: async () => ({
+        items: [radarItem('直连兜底的羊毛', 'https://example.com/fallback')],
+        errors: [],
+        perSource: [{ id: 'v2ex', count: 1, errors: [] }]
+      })
+    }
+  })
+  await call('/api/intel-center/radar/refresh', { method: 'POST', body: '{}' })
+  await waitJob(api.radarJob)
+
+  const status = await call('/api/intel-center/radar/status')
+  assert.equal(status.body.job.result.mode, 'fallback')
+  assert.equal(status.body.job.result.bySource.v2ex, 1)
 })
