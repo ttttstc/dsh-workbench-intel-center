@@ -8,7 +8,7 @@
 import { normalizeSettings } from './schedule.js'
 
 export const MAX_CARDS = 500
-export const MAX_FEED_ITEMS = 500
+export const MAX_FEED_ITEMS = 1200
 export const MAX_SUMMARY = 6
 export const MAX_FACTS = 12
 export const MAX_LIST = 8
