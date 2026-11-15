@@ -746,7 +746,9 @@ function Panel(props) {
   const radarFeed = state?.radar || { updatedAt: '', date: '', items: [] }
   const radarItems = radarFeed.items || []
   // 价格维度（限免/免费/低价/一般）与内容类型（游戏限免）分开：游戏单独一页，按截止时间排。
-  const { games: gameItems, offers: offerItems } = splitRadarItems(radarItems)
+  // 游戏不再单独成页：全部与主题里都能看到，用「游戏」主题筛即可。
+  const offerItems = radarItems
+  const gameItems = []
   const RADAR_SOURCE_LABEL = {
     linuxdo: 'LINUX DO',
     nodeseek: 'NodeSeek',
@@ -932,16 +934,39 @@ function Panel(props) {
         disabled: convBusy
       }, convBusy ? '正在准备对话…' : (convOpen ? '收起 AI 对话' : (folderConfirmed ? '选择资料文件夹…' : '打开 AI 对话')))))
 
-  const tabDefs = [
-    { id: 'radar', label: '羊毛雷达', count: offerItems.length },
-    { id: 'games', label: '游戏限免', count: gameItems.length },
+  // 一行平铺：全部 → 各主题 → | → 自有的三个页面。
+  // 「全部」就是原来的羊毛雷达；游戏不再单独成页，并入「游戏」主题。
+  const pageDefs = [
     { id: 'cards', label: 'VPS 羊毛', count: cards.length },
     { id: 'x', label: 'X 羊毛', count: xItems.length },
     { id: 'wool', label: 'Token 羊毛', count: 0 }
   ]
 
+  const openTopic = (topic) => {
+    setTab('radar')
+    setRadarTopic(tab === 'radar' && radarTopic === topic ? '' : topic)
+    void loadRadarStatus()
+  }
+
   const tabs = h('div', { className: 'intel-tabs', role: 'tablist', 'aria-label': '羊毛大王视图' },
-    tabDefs.map((item) => h('button', {
+    h('button', {
+      key: 'topic-all',
+      className: 'intel-tab',
+      role: 'tab',
+      'data-on': tab === 'radar' && !radarTopic ? '1' : '0',
+      'aria-selected': tab === 'radar' && !radarTopic ? 'true' : 'false',
+      onClick: () => openTopic('')
+    }, '全部', h('span', { className: 'intel-tab-count' }, radarItems.length)),
+    radarTopicChips.map(([topic, count]) => h('button', {
+      key: `topic-${topic}`,
+      className: 'intel-tab',
+      role: 'tab',
+      'data-on': tab === 'radar' && radarTopic === topic ? '1' : '0',
+      'aria-selected': tab === 'radar' && radarTopic === topic ? 'true' : 'false',
+      onClick: () => openTopic(topic)
+    }, RADAR_TOPIC_LABEL[topic] || topic, h('span', { className: 'intel-tab-count' }, count))),
+    h('span', { className: 'intel-tab-sep', 'aria-hidden': 'true' }, '|'),
+    pageDefs.map((item) => h('button', {
       key: item.id,
       className: 'intel-tab',
       role: 'tab',
@@ -950,34 +975,12 @@ function Panel(props) {
       onClick: () => {
         if (tab === item.id) return
         setTab(item.id)
-        if (item.id === 'radar') void loadRadarStatus()
         if (item.id === 'x') void loadXStatus()
         if (item.id === 'wool') setWoolLoading(true)
-        // 这两页的数据可能被 AI 会话或抓取任务直接写进文件，切回来时重新读一次。
-        if (item.id === 'cards' || item.id === 'games') void load()
+        // 这一页的数据可能被 AI 会话或抓取任务直接写进文件，切回来时重新读一次。
+        if (item.id === 'cards') void load()
       }
-    }, item.label, item.count > 0 ? h('span', { className: 'intel-tab-count' }, item.count) : null)),
-    // 主题直接平铺进 tab 行，替换原来的「来源分段」：
-    // 资源雷达是唯一主源，按来源切分已无意义；按主题切分才是用户真正要的。
-    tab === 'radar'
-      ? h('span', { className: 'intel-tab-sep', 'aria-hidden': 'true' }, '|')
-      : null,
-    tab === 'radar'
-      ? [
-        h('button', {
-          key: 'topic-all',
-          className: 'intel-tab intel-tab-src',
-          'data-on': radarTopic ? '0' : '1',
-          onClick: () => setRadarTopic('')
-        }, '全部'),
-        radarTopicChips.map(([topic, count]) => h('button', {
-          key: topic,
-          className: 'intel-tab intel-tab-src',
-          'data-on': radarTopic === topic ? '1' : '0',
-          onClick: () => setRadarTopic(radarTopic === topic ? '' : topic)
-        }, RADAR_TOPIC_LABEL[topic] || topic, h('span', { className: 'intel-tab-count' }, count)))
-      ]
-      : null)
+    }, item.label, item.count > 0 ? h('span', { className: 'intel-tab-count' }, item.count) : null)))
 
 
   const cardsBody = h('div', { className: 'intel-body' },
@@ -1419,55 +1422,13 @@ function Panel(props) {
           className: 'intel-btn intel-btn-ghost',
           onClick: () => { void prepareClaim(item) }
         }, 'AI 帮领'))))));
-  // 「游戏」是内容类型，不是价格维度：单独一页，按截止时间从近到远。
-  const gameRow = (item, index) => h('li', { key: item.id || item.url, className: 'intel-list-row' },
-    h('span', { className: 'intel-rank' }, index + 1),
-    h('div', { className: 'intel-list-main' },
-      h('a', {
-        className: 'intel-list-title',
-        href: item.url || 'https://store.epicgames.com/zh-CN/free-games',
-        target: '_blank',
-        rel: 'noreferrer noopener'
-      }, item.title),
-      h('div', { className: 'intel-badges' },
-        h('span', { className: 'intel-badge', 'data-tone': 'cat' }, 'Epic'),
-        deadlineChip(item.expiresAt),
-        item.score ? h('span', { className: 'intel-woolscore', 'data-tier': 'hot' }, '羊毛分 ' + item.score) : null),
-      item.excerpt ? h('div', { className: 'intel-muted', style: { fontSize: '12px' } }, item.excerpt) : null,
-      h('a', {
-        className: 'intel-link',
-        href: item.url || 'https://store.epicgames.com/zh-CN/free-games',
-        target: '_blank',
-        rel: 'noreferrer noopener'
-      }, '去领取 →')))
-
-  const gameEmpty = h('div', { className: 'intel-empty' },
-    h('strong', null, '现在没有可领的免费游戏'),
-    h('span', null, 'Epic 每周四换一批。点右下角「立即抓一次」手动刷新；如果一直为空，去「羊毛雷达」看「上次刷新」下面有没有 Epic 的失败原因。'),
-    h('span', { className: 'intel-muted', style: { display: 'block', marginTop: '6px' } },
-      `上次刷新：${formatWhen(radarFeed.updatedAt)}`))
-
-  const gameList = h('div', null,
-    h('ol', { className: 'intel-list' }, gameItems.map(gameRow)),
-    h('p', { className: 'intel-muted', style: { fontSize: '12px', margin: '10px 0 0' } },
-      `上次刷新：${formatWhen(radarFeed.updatedAt)} · 按截止时间排序，最先到期的在最上面`))
-
-  const gamesBody = h('div', { className: 'intel-body' },
-    h('div', { className: 'intel-band' }, '游戏限免 · Epic',
-      h('span', { className: 'intel-band-sub' }, `${gameItems.length} 个可领`)),
-    gameItems.length === 0 ? gameEmpty : gameList)
-
   const body = tab === 'wool'
     ? woolBody
       : tab === 'x'
         ? xBody
-          : tab === 'games'
-            ? gamesBody
-            : tab === 'radar'
-              ? radarBody
-              : cardsBody
-
-  // 错误、提示与服务端版本横幅都放在标签栏下方：任何一页操作都能看到反馈。
+          : tab === 'radar'
+            ? radarBody
+            : cardsBody
   const strip = (error || notice || serverOutdated)
     ? h('div', { className: 'intel-strip' },
       serverOutdated
@@ -1486,37 +1447,29 @@ function Panel(props) {
     h('div', { className: 'meta' },
       tab === 'wool'
         ? 'Token 羊毛为只读嵌入，领取与规则以 aihot.news 为准'
-        : tab === 'games'
-          ? 'Epic 每周免费游戏 · 截止前领取即永久入库'
-          : tab === 'x'
-            ? `X 榜单由 AI 用 web-access 抓取写回 · 上次抓取：${formatWhen(xFeed.updatedAt)}`
-            : `上次复核：${formatWhen(state?.lastReviewedAt)} · 数据更新：${formatWhen(state?.updatedAt)}`,
-      tab === 'cards' && savedAt ? ` · 已保存 ${formatWhen(savedAt)}` : '',
+        : tab === 'x'
+          ? `X 榜单由 AI 用 web-access 抓取写回 · 上次抓取：${formatWhen(xFeed.updatedAt)}`
+          : `上次复核：${formatWhen(state?.lastReviewedAt)} · 数据更新：${formatWhen(state?.updatedAt)}`,
       (tab === 'cards' || tab === 'x') && meta?.file
         ? h('span', { className: 'intel-muted', style: { display: 'block' } }, `数据文件：${meta.file}`)
         : null),
     tab === 'cards'
       ? h('div', { className: 'intel-actions' },
         h('button', { className: 'intel-btn intel-btn-primary', onClick: () => { void prepareReview() } }, '一键复核最新信息'))
-
-        : tab === 'games'
+      : tab === 'x'
+        ? h('div', { className: 'intel-actions' },
+          h('button', { className: 'intel-btn', onClick: () => { void load() }, disabled: loading }, loading ? '读取中…' : '刷新'),
+          h('button', { className: 'intel-btn intel-btn-primary', onClick: () => { void refreshXNow() }, disabled: xRunning }, xRunning ? `抓取中 ${elapsed}s…` : `立即抓 ${xStatus?.limit ?? X_TOP_LIMIT} 条`),
+          h('button', { className: 'intel-btn', onClick: () => { void prepareX() } }, '让 AI 搜'))
+        : tab === 'radar'
           ? h('div', { className: 'intel-actions' },
             h('button', { className: 'intel-btn', onClick: () => { void load() }, disabled: loading }, loading ? '读取中…' : '刷新列表'),
             h('button', { className: 'intel-btn intel-btn-primary', onClick: () => { void refreshRadarNow() }, disabled: radarRunning }, radarRunning ? `抓取中 ${elapsed}s…` : '立即抓一次'))
-          : tab === 'x'
-          ? h('div', { className: 'intel-actions' },
-            h('button', { className: 'intel-btn', onClick: () => { void load() }, disabled: loading }, loading ? '读取中…' : '刷新'),
-            h('button', { className: 'intel-btn intel-btn-primary', onClick: () => { void refreshXNow() }, disabled: xRunning }, xRunning ? `抓取中 ${elapsed}s…` : `立即抓 ${xStatus?.limit ?? X_TOP_LIMIT} 条`),
-            h('button', { className: 'intel-btn', onClick: () => { void prepareX() } }, '让 AI 搜'))
-          : tab === 'radar'
-            ? h('div', { className: 'intel-actions' },
-              h('button', { className: 'intel-btn', onClick: () => { void load() }, disabled: loading }, loading ? '读取中…' : '刷新列表'),
-              h('button', { className: 'intel-btn intel-btn-primary', onClick: () => { void refreshRadarNow() }, disabled: radarRunning }, radarRunning ? `抓取中 ${elapsed}s…` : '立即抓一次'))
-            : h('div', { className: 'intel-actions' },
-              h('button', {
-                className: 'intel-btn',
-                onClick: () => { setWoolForce(true); setWoolKey((value) => value + 1) }
-              }, '刷新羊毛页')))
+          : h('div', { className: 'intel-actions' },
+            h('button', {
+              className: 'intel-btn',
+              onClick: () => { setWoolForce(true); setWoolKey((value) => value + 1) }
+            }, '刷新羊毛页')))
 
   const drawer = convOpen
     ? h('aside', { className: 'intel-drawer', 'aria-label': 'AI 对话' },
@@ -1554,7 +1507,9 @@ function Panel(props) {
           }, '打开 AI 对话'))))
     : null
 
-  const tabLabel = (tabDefs.find((item) => item.id === tab) || tabDefs[0]).label
+  const tabLabel = tab === 'radar'
+    ? (radarTopic ? (RADAR_TOPIC_LABEL[radarTopic] || '全部') : '全部')
+    : (pageDefs.find((item) => item.id === tab) || pageDefs[0]).label
 
   if (loading && !state) {
     return h('div', { className: 'intel' },
