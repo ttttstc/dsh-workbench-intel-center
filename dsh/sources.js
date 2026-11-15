@@ -626,7 +626,7 @@ export function buildRadar(rawItems, { now = Date.now(), days = MAX_AGE_DAYS, li
       ...raw,
       category,
       score: graded.score,
-      topic: raw.topic || topicOf(text, category),
+      topic: normalizeTopic(raw.topic, text, category),
       tier: graded.tier,
       reasons: graded.reasons,
       verdict: graded.verdict,
@@ -807,6 +807,18 @@ export const TOPICS = [
   { id: 'edu', name: '教育' },
   { id: 'other', name: '其它' }
 ]
+
+/** 旧数据里可能存着已废弃的分类 id（deal / web 等）：能映射就映射，否则按内容重算。 */
+const TOPIC_ALIAS = { deal: 'goods', web: 'domain' }
+const TOPIC_IDS = new Set(TOPICS.map((item) => item.id))
+
+export function normalizeTopic(topic, text, category) {
+  const id = String(topic || '')
+  if (TOPIC_IDS.has(id)) return id
+  const alias = TOPIC_ALIAS[id]
+  if (alias && TOPIC_IDS.has(alias)) return alias
+  return topicOf(text, category)
+}
 
 const TOPIC_RULES = [
   ['game', /(游戏|Steam|Epic|PSN|Switch|Xbox)/i],

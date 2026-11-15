@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { filterRadar } from '../src/shared/core.js'
 import {
   parseUpstreamItems,
+  normalizeTopic,
   topicOf,
   buildRadar,
   classify,
@@ -310,4 +311,12 @@ test('主题分类：自有来源也能推断出主题，并按主题筛选', ()
   assert.deepEqual(filterRadar(items, { topic: 'media' }).map((item) => item.id), ['1'])
   assert.deepEqual(filterRadar(items, { topic: 'ai', category: 'free' }).map((item) => item.id), ['2'])
   assert.equal(filterRadar(items, { topic: 'vps' }).length, 0)
+})
+
+test('主题迁移：旧 id（deal / web）自动映射，未知的按内容重算', () => {
+  assert.equal(normalizeTopic('deal', '某 VPS 特价', 'cheap'), 'goods')
+  assert.equal(normalizeTopic('web', '域名 + SSL', 'free'), 'domain')
+  assert.equal(normalizeTopic('', 'B 站大会员免费领', 'free'), 'media')
+  assert.equal(normalizeTopic('nonsense', '阿里云额度', 'free'), 'ai')
+  assert.equal(normalizeTopic('vps', '随便什么标题', 'free'), 'vps', '合法 id 原样保留')
 })
