@@ -957,28 +957,25 @@ function Panel(props) {
         if (item.id === 'cards' || item.id === 'games') void load()
       }
     }, item.label, item.count > 0 ? h('span', { className: 'intel-tab-count' }, item.count) : null)),
-    // 雷达的来源分段与 tab 合并到同一行，避免两条分段条重复占位。
+    // 主题直接平铺进 tab 行，替换原来的「来源分段」：
+    // 资源雷达是唯一主源，按来源切分已无意义；按主题切分才是用户真正要的。
     tab === 'radar'
       ? h('span', { className: 'intel-tab-sep', 'aria-hidden': 'true' }, '|')
       : null,
     tab === 'radar'
       ? [
         h('button', {
-          key: 'src-all',
+          key: 'topic-all',
           className: 'intel-tab intel-tab-src',
-          'data-on': radarSource ? '0' : '1',
-          onClick: () => setRadarSource('')
-        }, '全部来源'),
-        ['linuxdo', 'v2ex', 'nodeseek', 'appinn'].map((id) => {
-          const pair = radarSourcesPresent.find(([key]) => key === id)
-          const count = pair ? pair[1] : 0
-          return h('button', {
-            key: id,
-            className: 'intel-tab intel-tab-src',
-            'data-on': radarSource === id ? '1' : '0',
-            onClick: () => setRadarSource(radarSource === id ? '' : id)
-          }, RADAR_SOURCE_LABEL[id], h('span', { className: 'intel-tab-count' }, count))
-        })
+          'data-on': radarTopic ? '0' : '1',
+          onClick: () => setRadarTopic('')
+        }, '全部'),
+        radarTopicChips.map(([topic, count]) => h('button', {
+          key: topic,
+          className: 'intel-tab intel-tab-src',
+          'data-on': radarTopic === topic ? '1' : '0',
+          onClick: () => setRadarTopic(radarTopic === topic ? '' : topic)
+        }, RADAR_TOPIC_LABEL[topic] || topic, h('span', { className: 'intel-tab-count' }, count)))
       ]
       : null)
 
@@ -1344,24 +1341,6 @@ function Panel(props) {
         }, '清空筛选')
         : null),
 
-    // 主题分类（影音会员 / AI 额度 / 云服务 / VPS 主机 / 域名建站 …）：
-    // 与「价格」是两个维度，单独一排，可以和标签叠加使用。
-    radarTopicChips.length > 0
-      ? h('div', { className: 'intel-tagrow' },
-        h('div', { className: 'intel-taglist' },
-          h('span', { className: 'intel-kwlabel' }, '主题'),
-          h('button', {
-            className: 'intel-tag',
-            'data-on': radarTopic ? '0' : '1',
-            onClick: () => setRadarTopic('')
-          }, '全部'),
-          radarTopicChips.map(([topic, count]) => h('button', {
-            key: topic,
-            className: 'intel-tag',
-            'data-on': radarTopic === topic ? '1' : '0',
-            onClick: () => setRadarTopic(radarTopic === topic ? '' : topic)
-          }, RADAR_TOPIC_LABEL[topic] || topic, h('span', { className: 'intel-kw-count' }, count)))))
-      : null,
 
     // 关键词 chips
     radarKeywordChips.length > 0

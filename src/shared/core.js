@@ -344,7 +344,7 @@ export const RADAR_TOPICS = [
 
 export const RADAR_TOPIC_LABEL = Object.fromEntries(RADAR_TOPICS.map((item) => [item.id, item.name]))
 
-export const API_VERSION = 9
+export const API_VERSION = 10
 
 /**
  * 写回规则：把「谁能改哪些字段」写给 Agent 看。
