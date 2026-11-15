@@ -318,7 +318,25 @@ export const X_TOP_LIMIT = 200
  * 客户端产物与插件服务端是两条加载路径：换版本后服务端要等 Harness 重启才用上新代码，
  * 而客户端 bundle 打开即生效。没有这个握手，界面只会表现为「刷新没反应」。
  */
-export const API_VERSION = 6
+/**
+ * 主题分类（「这是什么」）：与价格分类（「多少钱」）分开。
+ * 一条「B 站大会员免费领」既是「免费」也是「影音会员」，两个维度不该挤在同一排。
+ */
+export const RADAR_TOPICS = [
+  { id: 'media', name: '影音会员' },
+  { id: 'ai', name: 'AI 额度' },
+  { id: 'cloud', name: '云服务' },
+  { id: 'vps', name: 'VPS/主机' },
+  { id: 'web', name: '域名/建站' },
+  { id: 'game', name: '游戏' },
+  { id: 'deal', name: '实物/拼车' },
+  { id: 'edu', name: '学习/教育' },
+  { id: 'other', name: '其他' }
+]
+
+export const RADAR_TOPIC_LABEL = Object.fromEntries(RADAR_TOPICS.map((item) => [item.id, item.name]))
+
+export const API_VERSION = 7
 
 /**
  * 写回规则：把「谁能改哪些字段」写给 Agent 看。
@@ -352,11 +370,13 @@ export function sortRadarItems(items, order = 'score') {
 }
 
 /** 按来源、分类、关键词过滤雷达条目。 */
-export function filterRadar(items, { source = '', category = '', q = '' } = {}) {
+export function filterRadar(items, { source = '', category = '', topic = '', q = '' } = {}) {
   const needle = String(q || '').trim().toLowerCase()
   return (items || []).filter((item) => {
     if (source && item.source !== source) return false
     if (category && item.category !== category) return false
+    // 主题与价格是两个维度：可以「只看云服务」也可以「只看免费」，还能叠加
+    if (topic && item.topic !== topic) return false
     if (!needle) return true
     const haystack = [item.title, item.excerpt, item.author, item.handle, item.url].join(' ').toLowerCase()
     return haystack.includes(needle)
