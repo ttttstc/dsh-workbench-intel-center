@@ -148,6 +148,12 @@ export function buildReviewPrompt({ topics, cards, dataFile, today }) {
 /**
  * 生成「搜 X 上羊毛热帖」的指令。抓取必须走 web-access skill（用户 Chrome 的真实登录态 + CDP）。
  */
+/**
+ * 每天固定发羊毛资讯的 X 账号：搜索命中之外，直接抓这两条时间线。
+ * 客户端展示、服务端抓取、给 Agent 的指令都从这里取，避免三处各写一份。
+ */
+export const X_ACCOUNTS = ['Lovislexus', 'ShuaiMaLong']
+
 export function buildXPrompt({ date, keywords = ['羊毛', '薅'], dataFile, existing = [] }) {
   const day = date || todayISO()
   const kws = (keywords && keywords.length ? keywords : ['羊毛', '薅']).map((k) => `「${k}」`).join('、')
@@ -160,6 +166,7 @@ export function buildXPrompt({ date, keywords = ['羊毛', '薅'], dataFile, exi
     '## 目标',
     '- 站点：https://x.com',
     '- 关键词：' + kws,
+    '- 固定账号：' + X_ACCOUNTS.map((name) => '@' + name).join('、') + '（每天发羊毛资讯，必须单独抓时间线）',
     '- 排序：按点赞数（likes）从高到低，取前 ' + X_TOP_LIMIT + ' 条',
     '- 时间范围：优先今天（' + day + '），不足 50 条可放宽到最近 7 天',
     prev,
@@ -168,8 +175,9 @@ export function buildXPrompt({ date, keywords = ['羊毛', '薅'], dataFile, exi
     '1. 加载 web-access skill，按其指引用 CDP 操作用户 Chrome（天然带登录态），自建后台 tab，结束后关闭。',
     '2. 搜索页用 https://x.com/search?q=<关键词>&f=top ；关键词可补充「薅羊毛」「羊毛 免费」提高召回。',
     '3. 抽取每条帖子的：正文（超长截断）、作者名、@handle、点赞、转发、回复、发布时间、帖子链接。',
-    '4. 按帖子 id 去重，按点赞降序保留前 ' + X_TOP_LIMIT + '，过滤纯广告与无关内容。',
-    '5. 计数可能是「1.2万」这类中文缩写，统一换算成整数；抓不到的字段留 0，不要编造。',
+    '4. 另外直接打开 https://x.com/<账号> 抓这些账号的时间线（滚动 4 轮），它们每天发的羊毛不该靠关键词命中。',
+    '5. 按帖子 id 去重，按点赞降序保留前 ' + X_TOP_LIMIT + '，过滤纯广告与无关内容；来自账号时间线的条目写 via: "account"，搜索来的写 via: "search"。',
+    '6. 计数可能是「1.2万」这类中文缩写，统一换算成整数；抓不到的字段留 0，不要编造。',
     '',
     ...WRITE_RULES,
     '',
@@ -310,7 +318,7 @@ export const X_TOP_LIMIT = 200
  * 客户端产物与插件服务端是两条加载路径：换版本后服务端要等 Harness 重启才用上新代码，
  * 而客户端 bundle 打开即生效。没有这个握手，界面只会表现为「刷新没反应」。
  */
-export const API_VERSION = 5
+export const API_VERSION = 6
 
 /**
  * 写回规则：把「谁能改哪些字段」写给 Agent 看。

@@ -42,6 +42,7 @@ const CORE_EXPORTS = [
   'RADAR_CATEGORY_LABEL',
   'splitRadarItems',
   'X_TOP_LIMIT',
+  'X_ACCOUNTS',
   'API_VERSION',
   'sortRadarItems',
   'filterRadar',

@@ -160,6 +160,11 @@ const CSS = `
 .intel-verify[data-verdict='conditional']{color:#B5460F;border-color:#B5460F}
 .intel-verify[data-verdict='discount']{color:#1F5AA8;border-color:#1F5AA8}
 .intel-verify[data-verdict='unknown']{color:#777;opacity:.7}
+.intel-verify[data-verdict='lottery']{color:#8A5A00;border-color:#8A5A00}
+.intel-verify[data-verdict='talk'],.intel-verify[data-verdict='closed']{color:#777;opacity:.75}
+.intel-why{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:11px;opacity:.85}
+.intel-why-item[data-sign='up']{color:#1F7A45}
+.intel-why-item[data-sign='down']{color:#B5460F}
 .intel-deadline{font-size:11px;font-weight:700;padding:0 6px;border:1px solid currentColor;white-space:nowrap}
 .intel-deadline[data-urgent='1']{color:#C0261A;background:rgba(192,38,26,.08)}
 .intel-post-title{margin:0;font-size:15px;line-height:1.45;font-weight:700;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
@@ -1147,6 +1152,7 @@ function Panel(props) {
             }, item.title),
             h('div', { className: 'intel-badges' },
               item.handle ? h('span', { className: 'intel-badge', 'data-tone': 'cat' }, item.handle) : null,
+              item.via === 'account' ? h('span', { className: 'intel-badge', 'data-tone': 'ok' }, '关注账号') : null,
               item.author ? h('span', { className: 'intel-muted' }, item.author) : null,
               h('span', { className: 'intel-muted' }, `❤ ${item.likes}`),
               h('span', { className: 'intel-muted' }, `🔁 ${item.reposts}`),
@@ -1365,10 +1371,23 @@ function Panel(props) {
         h('span', { className: 'intel-post-src' }, RADAR_SOURCE_LABEL[item.source] || item.source),
         h('span', { className: 'intel-chip-tag', 'data-tag': item.category },
           RADAR_CATEGORY_LABEL[item.category] || '羊毛'),
-        item.score ? h('span', { className: 'intel-woolscore', 'data-tier': item.score >= 70 ? 'hot' : (item.score >= 50 ? 'warm' : 'cool') }, '羊毛分 ' + item.score) : null,
-        h('span', { className: 'intel-verify', 'data-verdict': item.verdict || 'unknown' }, ({ free: '真实免费', conditional: '有条件免费', discount: '只是优惠', unknown: '待判断' })[item.verdict] || '待判断'),
+        item.score ? h('span', {
+          className: 'intel-woolscore',
+          'data-tier': item.score >= 70 ? 'hot' : (item.score >= 50 ? 'warm' : 'cool'),
+          title: (item.reasons || []).map((reason) => `${reason.delta > 0 ? '+' : ''}${reason.delta} ${reason.label}`).join('\n') || '没有可解释的信号'
+        }, '羊毛分 ' + item.score) : null,
+        h('span', { className: 'intel-verify', 'data-verdict': item.verdict || (item.verified ? 'free' : 'unknown') }, ({ free: '真实免费', claimable: '真实免费', conditional: '有条件免费', discount: '只是优惠', lottery: '抽奖', talk: '讨论', closed: '已结束', unknown: '待判断' })[item.verdict] || '待判断'),
         item.expiresAt ? deadlineChip(item.expiresAt) : null,
         h('span', { className: 'intel-post-time' }, item.timeExact === false ? '最近活跃' : relativeTime(item.createdAt))),
+      // 「凭什么这个分」：把加减分理由直接摊在卡片上，用户不用信一个数字
+      (item.reasons && item.reasons.length)
+        ? h('div', { className: 'intel-why' },
+          item.reasons.slice(0, 3).map((reason) => h('span', {
+            key: `${reason.code}-${reason.delta}`,
+            className: 'intel-why-item',
+            'data-sign': reason.delta > 0 ? 'up' : 'down'
+          }, `${reason.delta > 0 ? '+' : ''}${reason.delta} ${reason.label}`)))
+        : null,
       h('a', {
         className: 'intel-post-title',
         href: item.url || '#',

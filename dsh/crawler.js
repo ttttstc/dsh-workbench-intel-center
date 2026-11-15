@@ -6,9 +6,12 @@
  */
 
 import { parseNodeSeek, parseRss } from './sources.js'
+import { X_ACCOUNTS } from '../src/shared/core.js'
 
 export const CDP_BASE = 'http://localhost:3456'
 export const DEFAULT_KEYWORDS = ['羊毛', '薅', '薅羊毛', '羊毛 免费', '白嫖', '免费领取']
+/** 固定账号清单放在 src/shared/core.js（客户端、服务端、给 Agent 的指令共用一份）。 */
+export { X_ACCOUNTS }
 
 /** 在页面里执行的抽取脚本：把 article 节点转成结构化帖子。 */
 export const EXTRACT_JS = `(() => {
@@ -106,20 +109,24 @@ export function createCdpClient(base = CDP_BASE) {
 export async function crawlX({
   cdp = createCdpClient(),
   keywords = DEFAULT_KEYWORDS,
+  accounts = X_ACCOUNTS,
   limit = 50,
   scrolls = 6,
+  accountScrolls = 4,
   pageWaitMs = 6000,
   scrollWaitMs = 2500,
   log = () => {}
 } = {}) {
   const seen = new Map()
   const errors = []
-  for (const keyword of keywords) {
+
+  /** 打开一个页面、滚几轮、抽取，把结果并进 seen（同一条被多处抓到就合并 via）。 */
+  async function collect(url, { rounds, via, label }) {
     let tabId = null
     try {
-      tabId = await cdp.newTab(`https://x.com/search?q=${encodeURIComponent(keyword)}&f=top`)
+      tabId = await cdp.newTab(url)
       await sleep(pageWaitMs)
-      for (let round = 0; round < scrolls; round += 1) {
+      for (let round = 0; round < rounds; round += 1) {
         const raw = await cdp.eval(tabId, EXTRACT_JS)
         if (raw) {
           let parsed = []
@@ -129,16 +136,25 @@ export async function crawlX({
             parsed = []
           }
           for (const post of parsed) {
-            if (post?.url && !seen.has(post.url)) seen.set(post.url, post)
+            if (!post?.url) continue
+            const existing = seen.get(post.url)
+            if (existing) {
+              // 账号时间线是用户明确订阅的来源，优先级高于泛关键词搜索命中
+              existing.via = via === 'account' ? 'account' : (existing.via || via)
+              continue
+            }
+            seen.set(post.url, { ...post, via })
           }
         }
-        await cdp.scrollBottom(tabId)
-        await sleep(scrollWaitMs)
+        if (round < rounds - 1) {
+          await cdp.scrollBottom(tabId)
+          await sleep(scrollWaitMs)
+        }
       }
-      log(`关键词「${keyword}」累计去重 ${seen.size} 条`)
+      log(`${label} 累计去重 ${seen.size} 条`)
     } catch (error) {
-      errors.push(`「${keyword}」${error?.message || error}`)
-      log(`关键词「${keyword}」失败：${error?.message || error}`)
+      errors.push(`${label}：${error?.message || error}`)
+      log(`${label} 失败：${error?.message || error}`)
     } finally {
       if (tabId) {
         try {
@@ -148,6 +164,23 @@ export async function crawlX({
         }
       }
     }
+  }
+
+  for (const keyword of keywords) {
+    await collect(`https://x.com/search?q=${encodeURIComponent(keyword)}&f=top`, {
+      rounds: scrolls,
+      via: 'search',
+      label: `关键词「${keyword}」`
+    })
+  }
+
+  // 固定账号的时间线：他们每天发的羊毛资讯不该依赖关键词命中。
+  for (const account of accounts) {
+    await collect(`https://x.com/${account}`, {
+      rounds: accountScrolls,
+      via: 'account',
+      label: `@${account}`
+    })
   }
 
   const items = [...seen.values()]
@@ -161,6 +194,7 @@ export async function crawlX({
       url: post.url,
       author: post.author || '',
       handle: post.handle || '',
+      via: post.via || 'search',
       likes: post.likes || 0,
       reposts: post.reposts || 0,
       replies: post.replies || 0,

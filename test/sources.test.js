@@ -227,3 +227,48 @@ test('Epic：所有尝试都失败时报出最近两次的原因', async () => {
   assert.match(result.errors[0], /Epic 免费游戏/)
   assert.match(result.errors[0], /connect timeout/)
 })
+
+test('评分：真实可薅的得高分，并给出可解释的理由', () => {
+  const graded = scoreWool({
+    title: '阿里云学生 300 元代金券，免费领取，直达链接',
+    source: 'linuxdo',
+    createdAt: new Date().toISOString()
+  })
+  assert.equal(graded.tier, 'claimable')
+  assert.ok(graded.score >= 85, `真羊毛该拿高分，实际 ${graded.score}`)
+  assert.ok(graded.reasons.length >= 3, '要有可解释的加减分项')
+  assert.ok(graded.reasons.some((r) => r.code === 'free' && r.delta > 0))
+  assert.ok(graded.reasons.some((r) => r.code === 'value' && r.delta > 0))
+})
+
+test('评分：已开奖/已结束直接判死，抽奖与讨论降级', () => {
+  const closed = scoreWool({ title: '【已开奖】万圣节抽奖，随机抽 100 名', source: 'nodeseek' })
+  assert.equal(closed.tier, 'closed')
+  assert.ok(closed.score < 10, '已开奖的不该拿分')
+
+  const lottery = scoreWool({ title: '免费抽奖 3 名送 1TB 网盘', source: 'v2ex' })
+  assert.equal(lottery.tier, 'lottery')
+  assert.ok(lottery.reasons.some((r) => r.code === 'lottery' && r.delta < 0))
+
+  const talk = scoreWool({ title: '有没有人了解华为od的啊', source: 'nodeseek' })
+  assert.equal(talk.tier, 'talk')
+  assert.ok(talk.score < 20)
+})
+
+test('评分：要绑卡/实名的降级为「有条件」，但仍可解释', () => {
+  const graded = scoreWool({ title: '免费领取 1TB 云盘 12 个月，需绑卡实名', source: 'v2ex' })
+  assert.equal(graded.tier, 'conditional')
+  assert.ok(graded.reasons.some((r) => r.code === 'condition' && r.delta < 0))
+  assert.ok(graded.score < 85, '有门槛的不该和真羊毛同分')
+})
+
+test('雷达收录：已结束的条目不再占位', () => {
+  const now = Date.parse('2026-11-15T00:00:00Z')
+  const built = buildRadar([
+    { title: '免费领取 100G 空间，直达链接', url: 'https://a.com/1', source: 'v2ex', createdAt: '2026-11-14T00:00:00Z' },
+    { title: '【已开奖】抽奖送 1TB，随机抽 10 名', url: 'https://a.com/2', source: 'nodeseek', createdAt: '2026-11-14T00:00:00Z' }
+  ], { now, limit: 10 })
+  assert.equal(built.length, 1, '已开奖的被丢掉')
+  assert.equal(built[0].url, 'https://a.com/1')
+  assert.ok(built[0].reasons.length > 0, '收录时带上理由，界面才能解释')
+})
