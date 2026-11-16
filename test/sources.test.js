@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { filterRadar } from '../src/shared/core.js'
+import { filterRadar, groupOfTopic, RADAR_GROUPS } from '../src/shared/core.js'
 import {
   parseUpstreamItems,
   normalizeTopic,
@@ -319,4 +319,24 @@ test('主题迁移：旧 id（deal / web）自动映射，未知的按内容重�
   assert.equal(normalizeTopic('', 'B 站大会员免费领', 'free'), 'media')
   assert.equal(normalizeTopic('nonsense', '阿里云额度', 'free'), 'ai')
   assert.equal(normalizeTopic('vps', '随便什么标题', 'free'), 'vps', '合法 id 原样保留')
+})
+
+test('主题分组：18 个分类合并成 6 组，AI 排第一，未知归其它', () => {
+  assert.deepEqual(RADAR_GROUPS.map((group) => group.id), ['ai', 'cloud', 'media', 'software', 'goods', 'other'])
+  assert.equal(groupOfTopic('ai'), 'ai')
+  assert.equal(groupOfTopic('vps'), 'cloud')
+  assert.equal(groupOfTopic('domain'), 'cloud')
+  assert.equal(groupOfTopic('game'), 'media')
+  assert.equal(groupOfTopic('hardware'), 'goods')
+  assert.equal(groupOfTopic('invite'), 'other')
+  assert.equal(groupOfTopic('not-exist'), 'other')
+
+  const items = [
+    { id: '1', topic: 'ai', category: 'free' },
+    { id: '2', topic: 'vps', category: 'free' },
+    { id: '3', topic: 'game', category: 'free' }
+  ]
+  assert.deepEqual(filterRadar(items, { group: 'cloud' }).map((item) => item.id), ['2'])
+  assert.deepEqual(filterRadar(items, { group: 'media' }).map((item) => item.id), ['3'])
+  assert.equal(filterRadar(items, { group: 'goods' }).length, 0)
 })

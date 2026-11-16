@@ -343,8 +343,32 @@ export const RADAR_TOPICS = [
   { id: 'other', name: '其它' }]
 
 export const RADAR_TOPIC_LABEL = Object.fromEntries(RADAR_TOPICS.map((item) => [item.id, item.name]))
+/**
+ * 主题分组：上游有 18 个分类，直接平铺一排太碎。按内容相关性合并成 6 组，
+ * AI 排第一（用户最关心），游戏并入「影音娱乐」，硬件并入「实物交易」。
+ * 原始 topic 仍完整存在数据里，只是界面上按组筛选，不丢信息。
+ */
+export const RADAR_GROUPS = [
+  { id: 'ai', name: 'AI 额度', topics: ['ai'] },
+  { id: 'cloud', name: '云与主机', topics: ['cloud', 'vps', 'domain', 'security'] },
+  { id: 'media', name: '影音娱乐', topics: ['media', 'game'] },
+  { id: 'software', name: '软件工具', topics: ['software', 'opensource', 'dev', 'design'] },
+  { id: 'goods', name: '实物交易', topics: ['goods', 'trade', 'carpool', 'hardware'] },
+  { id: 'other', name: '其它', topics: ['edu', 'invite', 'other'] }
+]
 
-export const API_VERSION = 11
+export const RADAR_GROUP_LABEL = Object.fromEntries(RADAR_GROUPS.map((group) => [group.id, group.name]))
+
+const TOPIC_TO_GROUP = Object.fromEntries(
+  RADAR_GROUPS.flatMap((group) => group.topics.map((topic) => [topic, group.id]))
+)
+
+/** 分类 id → 分组 id；不认识的一律归到「其它」。 */
+export function groupOfTopic(topic) {
+  return TOPIC_TO_GROUP[topic] || 'other'
+}
+
+export const API_VERSION = 12
 
 /**
  * 写回规则：把「谁能改哪些字段」写给 Agent 看。
@@ -378,13 +402,14 @@ export function sortRadarItems(items, order = 'score') {
 }
 
 /** 按来源、分类、关键词过滤雷达条目。 */
-export function filterRadar(items, { source = '', category = '', topic = '', q = '' } = {}) {
+export function filterRadar(items, { source = '', category = '', topic = '', group = '', q = '' } = {}) {
   const needle = String(q || '').trim().toLowerCase()
   return (items || []).filter((item) => {
     if (source && item.source !== source) return false
     if (category && item.category !== category) return false
     // 主题与价格是两个维度：可以「只看云服务」也可以「只看免费」，还能叠加
     if (topic && item.topic !== topic) return false
+    if (group && groupOfTopic(item.topic) !== group) return false
     if (!needle) return true
     const haystack = [item.title, item.excerpt, item.author, item.handle, item.url].join(' ').toLowerCase()
     return haystack.includes(needle)
