@@ -591,3 +591,23 @@
 
 测试：`assert.equal((text.match(/全部/g) || []).length, 1)` —— 用断言把「只有一个全部」钉住，
 并断言「全部来源」不再出现。
+
+---
+
+## 18. 1.34.0：tab 行收敛为「自有页面在前 + 6 个主题分组」
+
+用户反馈：① tab 分类太多；② X 羊毛与 Token 羊毛要放前两位；③ 最关心 AI。
+
+改法：
+- 顺序重排：`X 羊毛 | Token 羊毛 | VPS 羊毛 | 全部 | AI 额度 | 云与主机 | 影音娱乐 | 软件工具 | 实物交易 | 其它`
+- 18 个上游分类合并成 6 组（`RADAR_GROUPS`），AI 排第一：
+  - AI 额度 ← ai
+  - 云与主机 ← cloud / vps / domain / security
+  - 影音娱乐 ← media / game
+  - 软件工具 ← software / opensource / dev / design
+  - 实物交易 ← goods / trade / carpool / hardware
+  - 其它 ← edu / invite / other
+- 原始 `topic` 仍完整存在数据里，只是界面上按组筛选 —— 合并只影响展示，不丢信息
+- `filterRadar` 增加 `group` 维度（`groupOfTopic` 做映射，未知归「其它」）
+
+实测（真实抓取 1025 条）：AI 额度 84 / 云与主机 85 / 影音娱乐 156 / 软件工具 51 / 实物交易 394 / 其它 255。

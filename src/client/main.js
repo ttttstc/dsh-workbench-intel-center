@@ -398,7 +398,7 @@ function Panel(props) {
   const [xBusy, setXBusy] = useState(false)
   const [radarSource, setRadarSource] = useState('')
   const [radarCategory, setRadarCategory] = useState('')
-  const [radarTopic, setRadarTopic] = useState('')
+  const [radarGroup, setRadarGroup] = useState('')
   const [radarQuery, setRadarQuery] = useState('')
   const [radarKeyword, setRadarKeyword] = useState('')
   const [radarSince, setRadarSince] = useState('')
@@ -779,10 +779,10 @@ function Panel(props) {
     return `上次抓到 ${job.result.fresh ?? 0} 条 · 用时 ${seconds}s${parts.length ? '（' + parts.join(' / ') + '）' : ''}`
   }
 
-  const radarVisible = useMemo(() => filterRadar(offerItems, { source: radarSource, category: radarCategory, topic: radarTopic, q: radarQuery }), [offerItems, radarSource, radarCategory, radarTopic, radarQuery])
+  const radarVisible = useMemo(() => filterRadar(offerItems, { source: radarSource, category: radarCategory, group: radarGroup, q: radarQuery }), [offerItems, radarSource, radarCategory, radarGroup, radarQuery])
   const radarSourcesPresent = useMemo(() => { const seen = new Map(); for (const item of offerItems) seen.set(item.source, (seen.get(item.source) || 0) + 1); return [...seen.entries()] }, [offerItems])
   // 主题分类（影音会员 / AI 额度 / 云服务 …）：出现的才显示，避免一排空按钮
-  const radarTopicChips = useMemo(() => {
+  const radarGroupChips = useMemo(() => {
     const seen = new Map()
     for (const item of offerItems) {
       const topic = item.topic || 'other'
@@ -937,36 +937,20 @@ function Panel(props) {
   // 一行平铺：全部 → 各主题 → | → 自有的三个页面。
   // 「全部」就是原来的羊毛雷达；游戏不再单独成页，并入「游戏」主题。
   const pageDefs = [
-    { id: 'cards', label: 'VPS 羊毛', count: cards.length },
     { id: 'x', label: 'X 羊毛', count: xItems.length },
-    { id: 'wool', label: 'Token 羊毛', count: 0 }
+    { id: 'wool', label: 'Token 羊毛', count: 0 },
+    { id: 'cards', label: 'VPS 羊毛', count: cards.length }
   ]
 
-  const openTopic = (topic) => {
-    setTab('radar')
-    setRadarTopic(tab === 'radar' && radarTopic === topic ? '' : topic)
+  const openGroup = (group) => {
+    setRadarGroup(tab === 'radar' && radarGroup === group ? '' : group)
+    setRadarGroup(tab === 'radar' && radarGroup === topic ? '' : topic)
     void loadRadarStatus()
   }
 
   const tabs = h('div', { className: 'intel-tabs', role: 'tablist', 'aria-label': '羊毛大王视图' },
-    h('button', {
-      key: 'topic-all',
-      className: 'intel-tab',
-      role: 'tab',
-      'data-on': tab === 'radar' && !radarTopic ? '1' : '0',
-      'aria-selected': tab === 'radar' && !radarTopic ? 'true' : 'false',
-      onClick: () => openTopic('')
-    }, '全部', h('span', { className: 'intel-tab-count' }, radarItems.length)),
-    radarTopicChips.map(([topic, count]) => h('button', {
-      key: `topic-${topic}`,
-      className: 'intel-tab',
-      role: 'tab',
-      'data-on': tab === 'radar' && radarTopic === topic ? '1' : '0',
-      'aria-selected': tab === 'radar' && radarTopic === topic ? 'true' : 'false',
-      onClick: () => openTopic(topic)
-    }, RADAR_TOPIC_LABEL[topic] || topic, h('span', { className: 'intel-tab-count' }, count))),
-    h('span', { className: 'intel-tab-sep', 'aria-hidden': 'true' }, '|'),
-    pageDefs.map((item) => h('button', {
+    // 第一梯队：自有的两个页面（用户最常用）
+    pageDefs.slice(0, 2).map((item) => h('button', {
       key: item.id,
       className: 'intel-tab',
       role: 'tab',
@@ -977,10 +961,38 @@ function Panel(props) {
         setTab(item.id)
         if (item.id === 'x') void loadXStatus()
         if (item.id === 'wool') setWoolLoading(true)
-        // 这一页的数据可能被 AI 会话或抓取任务直接写进文件，切回来时重新读一次。
+      }
+    }, item.label, item.count > 0 ? h('span', { className: 'intel-tab-count' }, item.count) : null)),
+    pageDefs.slice(2).map((item) => h('button', {
+      key: item.id,
+      className: 'intel-tab',
+      role: 'tab',
+      'data-on': tab === item.id ? '1' : '0',
+      'aria-selected': tab === item.id ? 'true' : 'false',
+      onClick: () => {
+        if (tab === item.id) return
+        setTab(item.id)
         if (item.id === 'cards') void load()
       }
-    }, item.label, item.count > 0 ? h('span', { className: 'intel-tab-count' }, item.count) : null)))
+    }, item.label, item.count > 0 ? h('span', { className: 'intel-tab-count' }, item.count) : null)),
+    h('span', { className: 'intel-tab-sep', 'aria-hidden': 'true' }, '|'),
+    // 第二梯队：全部 + 6 个主题分组（AI 排第一，只显示有内容的组）
+    h('button', {
+      key: 'group-all',
+      className: 'intel-tab',
+      role: 'tab',
+      'data-on': tab === 'radar' && !radarGroup ? '1' : '0',
+      'aria-selected': tab === 'radar' && !radarGroup ? 'true' : 'false',
+      onClick: () => openGroup('')
+    }, '全部', h('span', { className: 'intel-tab-count' }, radarItems.length)),
+    radarGroupChips.map(([group, count]) => h('button', {
+      key: `group-${group}`,
+      className: 'intel-tab',
+      role: 'tab',
+      'data-on': tab === 'radar' && radarGroup === group ? '1' : '0',
+      'aria-selected': tab === 'radar' && radarGroup === group ? 'true' : 'false',
+      onClick: () => openGroup(group)
+    }, RADAR_GROUP_LABEL[group] || group, h('span', { className: 'intel-tab-count' }, count))))
 
 
   const cardsBody = h('div', { className: 'intel-body' },
@@ -1201,7 +1213,7 @@ function Panel(props) {
     if (radarKeyword && !top.some(([word]) => word === radarKeyword)) return [...top, [radarKeyword, 0]]
     return top
   })()
-  const radarFilterActive = Boolean(radarSource || radarCategory || radarTopic || radarQuery || radarKeyword || radarSince)
+  const radarFilterActive = Boolean(radarSource || radarCategory || radarGroup || radarQuery || radarKeyword || radarSince)
 
   const radarBody = h('div', { className: 'intel-body intel-radar' },
     // 顶部统计条
@@ -1335,7 +1347,7 @@ function Panel(props) {
           className: 'intel-btn intel-btn-ghost',
           onClick: () => {
             setRadarSource('')
-            setRadarTopic('')
+            setRadarGroup('')
             setRadarCategory('')
             setRadarQuery('')
             setRadarKeyword('')
@@ -1508,7 +1520,7 @@ function Panel(props) {
     : null
 
   const tabLabel = tab === 'radar'
-    ? (radarTopic ? (RADAR_TOPIC_LABEL[radarTopic] || '全部') : '全部')
+    ? (radarGroup ? (RADAR_GROUP_LABEL[radarGroup] || '全部') : '全部')
     : (pageDefs.find((item) => item.id === tab) || pageDefs[0]).label
 
   if (loading && !state) {
